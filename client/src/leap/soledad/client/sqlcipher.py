@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+#E -*- coding: utf-8 -*-
 # sqlcipher.py
 # Copyright (C) 2013 LEAP
 #
@@ -153,7 +153,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
 
     def __init__(self, sqlcipher_file, password, document_factory=None,
                  crypto=None, raw_key=False, cipher='aes-256-cbc',
-                 kdf_iter=4000, cipher_page_size=1024):
+                 kdf_iter=4000, cipher_page_size=1024, shared_cache=True):
         """
         Create a new sqlcipher file.
 
@@ -176,13 +176,16 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         :type kdf_iter: int
         :param cipher_page_size: The page size.
         :type cipher_page_size: int
+        :param shared_cache: Whether to enable shared cache or not.
+                             Enabled by default.
+        :type shared_cache: bool
         """
         # ensure the db is encrypted if the file already exists
         if os.path.exists(sqlcipher_file):
             self.assert_db_is_encrypted(
                 sqlcipher_file, password, raw_key, cipher, kdf_iter,
                 cipher_page_size)
-        # connect to the database
+        # connect to the database and setup configuration options
         with self.k_lock:
             self._db_handle = dbapi2.connect(
                 sqlcipher_file,
@@ -192,6 +195,9 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             self._set_crypto_pragmas(
                 self._db_handle, password, raw_key, cipher, kdf_iter,
                 cipher_page_size)
+            if shared_cache:
+                dbapi2.enable_shared_cache(True)
+                #self._pragma_read_uncommited(self._db_handle)
             if os.environ.get('LEAP_SQLITE_NOSYNC'):
                 self._pragma_synchronous_off(self._db_handle)
             else:
@@ -759,6 +765,22 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             raise NotAnHexString(key)
         # XXX change passphrase param!
         db_handle.cursor().execute('PRAGMA rekey = "x\'%s"' % passphrase)
+
+    @classmethod
+    def _pragma_read_uncommited(cls, db_handle):
+        """
+        Set the READ UNCOMMITTED isolation for the database.
+
+        From sqlite docs:
+        "A database connection in read-uncommitted mode does not attempt to
+        obtain read-locks before reading from database tables as described
+        above. This can lead to inconsistent query results if another database
+        connection modifies a table while it is being read, but it also means
+        that a read-transaction opened by a connection in read-uncommitted mode
+        can neither block nor be blocked by any other connection."
+        """
+        logger.debug("SQLCIPHER: SETTING READ_UNCOMMITED ON")
+        db_handle.cursor().execute('PRAGMA read_uncommited=ON')
 
     @classmethod
     def _pragma_synchronous_off(cls, db_handle):
