@@ -51,6 +51,7 @@ import threading
 import time
 
 from pysqlcipher import dbapi2
+from taskthread import TimerTask
 from u1db.backends import sqlite_backend
 from u1db.sync import Synchronizer
 from u1db import errors as u1db_errors
@@ -80,6 +81,9 @@ SQLITE_CHECK_SAME_THREAD = False
 # (The error was:
 # OperationalError:cannot start a transaction within a transaction.)
 SQLITE_ISOLATION_LEVEL = None
+
+# checkpoint period, in seconds
+SQLITE_CHECKPOINT_PERIOD = 0.20
 
 
 def open(path, password, create=True, document_factory=None, crypto=None,
@@ -153,7 +157,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
 
     def __init__(self, sqlcipher_file, password, document_factory=None,
                  crypto=None, raw_key=False, cipher='aes-256-cbc',
-                 kdf_iter=4000, cipher_page_size=1024, shared_cache=True):
+                 kdf_iter=4000, cipher_page_size=1024, shared_cache=False,
+                 autocheckpoint=False):
         """
         Create a new sqlcipher file.
 
@@ -204,10 +209,17 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
                 self._pragma_synchronous_normal(self._db_handle)
             if os.environ.get('LEAP_SQLITE_MEMSTORE'):
                 self._pragma_mem_temp_store(self._db_handle)
-            self._pragma_write_ahead_logging(self._db_handle)
+            self._pragma_write_ahead_logging(self._db_handle, autocheckpoint)
+
             self._real_replica_uid = None
             self._ensure_schema()
             self._crypto = crypto
+            if not autocheckpoint:
+                self.checkpoint_task = TimerTask(
+                    self._do_db_checkpoint, delay=SQLITE_CHECKPOINT_PERIOD)
+                self.checkpoint_task.start()
+            else:
+                self.checkpoint_task = None
 
         def factory(doc_id=None, rev=None, json='{}', has_conflicts=False,
                     syncable=True):
@@ -215,6 +227,15 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
                                    has_conflicts=has_conflicts,
                                    syncable=syncable)
         self.set_document_factory(factory)
+
+    def _do_db_checkpoint(self):
+        try:
+            result = self._db_handle.execute("PRAGMA wal_checkpoint(FULL)")
+            logger.debug("DONE checkpoint! %r" % (result.fetchall(),))
+        except Exception as exc:
+            pass
+            #logger.error("Error while doing SQLITE checkpoint")
+            #logger.exception(exc)
 
     @classmethod
     def _open_database(cls, sqlcipher_file, password, document_factory=None,
@@ -807,7 +828,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         db_handle.cursor().execute('PRAGMA temp_store=MEMORY')
 
     @classmethod
-    def _pragma_write_ahead_logging(cls, db_handle):
+    def _pragma_write_ahead_logging(cls, db_handle, autocheckpoint=False):
         """
         Enable write-ahead logging, and set the autocheckpoint to 50 pages.
 
@@ -838,7 +859,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         # As a further improvement, we might want to set autocheckpoint to 0
         # here and do the checkpoints manually in a separate thread, to avoid
         # any blocks in the main thread (we should run a loopingcall from here)
-        db_handle.cursor().execute('PRAGMA wal_autocheckpoint=50')
+        if autocheckpoint:
+            db_handle.cursor().execute('PRAGMA wal_autocheckpoint=50')
 
     # Extra query methods: extensions to the base sqlite implmentation.
 
@@ -895,6 +917,12 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         """
         Closes db_handle upon object destruction.
         """
+        # XXX there's no guarantee this method will be called.
+        # Use explicit shutdown instead.
+
+        if self.checkpoint_task is not None:
+            self.checkpoint_task.close()
+            self.checkpoint_task.shutdown()
         if self._db_handle is not None:
             self._db_handle.close()
 
