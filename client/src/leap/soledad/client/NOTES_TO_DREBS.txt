@@ -1,8 +1,0 @@
-# TODO: remove backend class from here.
-if backend_cls is None:
-    # default is SQLCipherPartialExpandDatabase
-    backend_cls = SQLCipherDatabase
-
-That is a remanent of some moment in which you wanted to abstact the backend away?
-in that case, I guess we can get rid of it, right?
-
