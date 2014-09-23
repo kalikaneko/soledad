@@ -45,7 +45,7 @@ import logging
 import multiprocessing
 import os
 import threading
-import time
+# import time --- needed for the win initialization hack
 import json
 
 from hashlib import sha256
@@ -103,6 +103,8 @@ def initialize_sqlcipher_db(opts, on_init=None):
     """
     # TODO we used to have a lock for the initialization here.
     # Is that really needed if we're going to have a threadpool?
+    # u1db holds a mutex over sqlite internally for the initialization...
+
     on_init = [] if on_init is None else on_init
 
     sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
@@ -135,7 +137,6 @@ class SQLCipherOptions(object):
     """
     def __init__(self, path, key, create=True, is_raw_key=False,
                  cipher='aes-256-cbc', kdf_iter=4000, cipher_page_size=1024,
-                 document_factory=None,
                  defer_encryption=False, sync_db_key=None):
         """
         :param path: The filesystem path for the database to open.
@@ -144,10 +145,6 @@ class SQLCipherOptions(object):
             True/False, should the database be created if it doesn't
             already exist?
         :param create: bool
-        :param document_factory:
-            A function that will be called with the same parameters as
-            Document.__init__.
-        :type document_factory: callable
         :param crypto: An instance of SoledadCrypto so we can encrypt/decrypt
             document contents when syncing.
         :type crypto: soledad.crypto.SoledadCrypto
@@ -175,47 +172,11 @@ class SQLCipherOptions(object):
         self.cipher_page_size = cipher_page_size
         self.defer_encryption = defer_encryption
         self.sync_db_key = sync_db_key
-        self.document_factory = None
-
-
-# def open(path, password, create=True, document_factory=None, crypto=None,
-# raw_key=False, cipher='aes-256-cbc', kdf_iter=4000,
-# cipher_page_size=1024, defer_encryption=False, sync_db_key=None):
-    # """
-    # Open a database at the given location.
-#
-    # *** IMPORTANT ***
-#
-    # Don't forget to close the database after use by calling the close()
-    # method otherwise some resources might not be freed and you may experience
-    # several kinds of leakages.
-#
-    # *** IMPORTANT ***
-#
-#   Will raise u1db.errors.DatabaseDoesNotExist if create=False and the
-#   database does not already exist.
-#
-#   :return: An instance of Database.
-#   :rtype SQLCipherDatabase
-#   """
-#   args = (path, password)
-#   kwargs = {
-#       'create': create,
-#       'document_factory': document_factory,
-#       'crypto': crypto,
-#       'raw_key': raw_key,
-#       'cipher': cipher,
-#       'kdf_iter': kdf_iter,
-#       'cipher_page_size': cipher_page_size,
-#       'defer_encryption': defer_encryption,
-#       'sync_db_key': sync_db_key}
-# XXX pass only a CryptoOptions object around
-#    return SQLCipherDatabase.open_database(*args, **kwargs)
-
 
 #
 # The SQLCipher database
 #
+
 
 class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
     """
@@ -223,10 +184,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
     """
     defer_encryption = False
 
-    _index_storage_value = 'expand referenced encrypted'
-    k_lock = threading.Lock()
-    create_doc_lock = threading.Lock()
-    update_indexes_lock = threading.Lock()
+    # XXX not used afaik:
+    # _index_storage_value = 'expand referenced encrypted'
 
     def __init__(self, soledad_crypto, opts):
         """
@@ -247,27 +206,18 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         :type opts: SQLCipherOptions
         """
         # ensure the db is encrypted if the file already exists
-        if os.path.exists(opts.path):
+        if os.path.isfile(opts.path):
             self.assert_db_is_encrypted(opts)
 
         # connect to the sqlcipher database
-        # XXX this lock should not be needed -----------------
-        # u1db holds a mutex over sqlite internally for the initialization.
 
-        with self.k_lock:
-            self._db_handle = initialize_sqlcipher_db(opts)
-            self._real_replica_uid = None
-            self._ensure_schema()
+        self._db_handle = initialize_sqlcipher_db(opts)
+        self._ensure_schema()
 
         self._crypto = soledad_crypto
         self._sqlcipher_file = opts.path
 
-        def factory(doc_id=None, rev=None, json='{}', has_conflicts=False,
-                    syncable=True):
-            return SoledadDocument(doc_id=doc_id, rev=rev, json=json,
-                                   has_conflicts=has_conflicts,
-                                   syncable=syncable)
-        self.set_document_factory(factory)
+        self.set_document_factory(soledad_doc_factory)
 
     def _extra_schema_init(self, c):
         """
@@ -324,6 +274,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         The easiest way to do this is select off the sqlite_master table,
         which will attempt to read the first page of the database and will
         parse the schema.
+
+        :param opts:
         """
         # We try to open an encrypted database with the regular u1db
         # backend should raise a DatabaseError exception.
@@ -334,10 +286,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         except sqlcipher_dbapi2.DatabaseError:
             # assert that we can access it using SQLCipher with the given
             # key
-            with self.k_lock:
-                # XXX is this lock *really* needed??
-                dummy_query = 'SELECT count(*) FROM sqlite_master'
-                db_handle = initialize_sqlcipher_db(opts, on_init=dummy_query)
+            dummy_query = 'SELECT count(*) FROM sqlite_master'
+            initialize_sqlcipher_db(opts, on_init=dummy_query)
         else:
             raise DatabaseIsNotEncrypted()
 
@@ -345,7 +295,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
 
     def get_count_from_index(self, index_name, *key_values):
         """
-        Returns the count for a given combination of index_name
+        Return the count for a given combination of index_name
         and key values.
 
         Extension method made from similar methods in u1db version 13.09
@@ -418,13 +368,11 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         :param doc: The new version of the document.
         :type doc: u1db.Document
         """
-        with self.update_indexes_lock:
-            sqlite_backend.SQLitePartialExpandDatabase._put_and_update_indexes(
-                self, old_doc, doc)
-            c = self._db_handle.cursor()
-            c.execute('UPDATE document SET syncable=? '
-                      'WHERE doc_id=?',
-                      (doc.syncable, doc.doc_id))
+        sqlite_backend.SQLitePartialExpandDatabase._put_and_update_indexes(
+            self, old_doc, doc)
+        c = self._db_handle.cursor()
+        c.execute('UPDATE document SET syncable=? WHERE doc_id=?',
+                  (doc.syncable, doc.doc_id))
 
     def _get_doc(self, doc_id, check_for_conflicts=False):
         """
@@ -460,13 +408,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         """
         self.close()
 
-    @property
-    def replica_uid(self):
-        return self._get_replica_uid()
-
     # TODO ---- rescue the fix for the windows case from here...
     # @classmethod
-    # XXX Use SQLCIpherOptions instead
     # def _open_database(cls, sqlcipher_file, password, document_factory=None,
         # crypto=None, raw_key=False, cipher='aes-256-cbc',
         # kdf_iter=4000, cipher_page_size=1024,
@@ -536,11 +479,14 @@ class SQLCipherU1DBSync(object):
     A dictionary that hold locks which avoid multiple sync attempts from the
     same database replica.
     """
+    # XXX We do not need the lock here now. Remove.
     encrypting_lock = threading.Lock()
 
     """
     Period or recurrence of the periodic encrypting task, in seconds.
     """
+    # XXX use LoopingCall.
+    # Just use fucking deferreds, do not waste time looping.
     ENCRYPT_TASK_PERIOD = 1
 
     """
@@ -628,14 +574,15 @@ class SQLCipherU1DBSync(object):
 
         :param url: The url of the target replica to sync with.
         :type url: str
-        :param creds: optional dictionary giving credentials.
+        :param creds:
+            optional dictionary giving credentials.
             to authorize the operation with the server.
         :type creds: dict
         :param autocreate: Ask the target to create the db if non-existent.
         :type autocreate: bool
-        :param defer_decryption: Whether to defer the decryption process using
-                                 the intermediate database. If False,
-                                 decryption will be done inline.
+        :param defer_decryption:
+            Whether to defer the decryption process using the intermediate
+            database. If False, decryption will be done inline.
         :type defer_decryption: bool
 
         :return: The local generation before the synchronisation was performed.
@@ -753,6 +700,10 @@ class SQLCipherU1DBSync(object):
             finally:
                 lock.release()
 
+    @property
+    def replica_uid(self):
+        return self._get_replica_uid()
+
     def close(self):
         """
         Close the syncer and syncdb orderly
@@ -793,5 +744,14 @@ class DatabaseIsNotEncrypted(Exception):
     """
     pass
 
+
+def soledad_doc_factory(doc_id=None, rev=None, json='{}', has_conflicts=False,
+                        syncable=True):
+    """
+    Return a default Soledad Document.
+    Used in the initialization for SQLCipherDatabase
+    """
+    return SoledadDocument(doc_id=doc_id, rev=rev, json=json,
+                           has_conflicts=has_conflicts, syncable=syncable)
 
 sqlite_backend.SQLiteDatabase.register_implementation(SQLCipherDatabase)

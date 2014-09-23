@@ -47,8 +47,8 @@ from leap.common.config import get_path_prefix
 from leap.soledad.common import SHARED_DB_NAME
 from leap.soledad.common import soledad_assert
 from leap.soledad.common import soledad_assert_type
-from leap.soledad.common.document import SoledadDocument
 
+from leap.soledad.client import adbapi
 from leap.soledad.client import events as soledad_events
 from leap.soledad.client.crypto import SoledadCrypto
 from leap.soledad.client.secrets import SoledadSecrets
@@ -199,18 +199,19 @@ class Soledad(object):
         Initialize configuration using default values for missing params.
         """
         soledad_assert_type(self._passphrase, unicode)
+        initialize = lambda attr, val: attr is None and setattr(attr, val)
+
         # initialize secrets_path
-        if self._secrets_path is None:
-            self._secrets_path = os.path.join(
-                self.DEFAULT_PREFIX, self.STORAGE_SECRETS_FILE_NAME)
+        initialize(self._secrets_path, os.path.join(
+            self.DEFAULT_PREFIX, self.STORAGE_SECRETS_FILE_NAME))
+
         # initialize local_db_path
-        if self._local_db_path is None:
-            self._local_db_path = os.path.join(
-                self.DEFAULT_PREFIX, self.LOCAL_DATABASE_FILE_NAME)
+        initialize(self._local_db_path, os.path.join(
+            self.DEFAULT_PREFIX, self.LOCAL_DATABASE_FILE_NAME))
+
         # initialize server_url
-        soledad_assert(
-            self._server_url is not None,
-            'Missing URL for Soledad server.')
+        soledad_assert(self._server_url is not None,
+                       'Missing URL for Soledad server.')
 
     #
     # initialization/destruction methods
@@ -268,9 +269,11 @@ class Soledad(object):
             create=True,
             defer_encryption=self._defer_encryption,
             sync_db_key=sync_db_key,
-            document_factory=SoledadDocument,
         )
         self._db = SQLCipherDatabase(self._crypto, opts)
+
+        # TODO aaaaaand this is what we want
+        # self._dbpool = adbapi.getConnectionPool(opts)
 
     def close(self):
         """
@@ -280,8 +283,10 @@ class Soledad(object):
         if hasattr(self, '_db') and isinstance(
                 self._db,
                 SQLCipherDatabase):
-            self._db.stop_sync()
             self._db.close()
+
+            # XXX stop syncers
+            # self._db.stop_sync()
 
     @property
     def _shared_db(self):
@@ -817,4 +822,3 @@ class VerifiedHTTPSConnection(httplib.HTTPSConnection):
 
 old__VerifiedHTTPSConnection = http_client._VerifiedHTTPSConnection
 http_client._VerifiedHTTPSConnection = VerifiedHTTPSConnection
-
