@@ -273,7 +273,9 @@ class Soledad(object):
         self._db = SQLCipherDatabase(self._crypto, opts)
 
         # TODO aaaaaand this is what we want
-        # self._dbpool = adbapi.getConnectionPool(opts)
+        # openfun = functools.partial(sqlcipher.init_crypto, opts=opts)
+        # self._dbpool = adbapi.getConnectionPool(opts,
+        #       openfun=openfun)
 
     def close(self):
         """

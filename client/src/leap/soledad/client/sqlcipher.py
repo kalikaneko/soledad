@@ -92,6 +92,29 @@ SQLITE_CHECK_SAME_THREAD = False
 SQLITE_ISOLATION_LEVEL = None
 
 
+def init_crypto(conn, opts=None, extra_queries=None):
+
+    assert opts is not None
+
+    extra_queries = [] if extra_queries is None else extra_queries
+
+    sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
+    memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
+
+    pragmas.set_crypto_pragmas(conn, opts)
+    pragmas.set_write_ahead_logging(conn)
+
+    if sync_off:
+        pragmas.set_synchronous_off(conn)
+    else:
+        pragmas.set_synchronous_normal(conn)
+    if memstore:
+        pragmas.set_mem_temp_store(conn)
+
+    for query in extra_queries:
+        conn.cursor().execute(query)
+
+
 def initialize_sqlcipher_db(opts, on_init=None):
     """
     Initialize a SQLCipher database.
@@ -105,30 +128,13 @@ def initialize_sqlcipher_db(opts, on_init=None):
     # Is that really needed if we're going to have a threadpool?
     # u1db holds a mutex over sqlite internally for the initialization...
 
-    on_init = [] if on_init is None else on_init
-
-    sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
-    memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
-
-    db_handle = sqlcipher_dbapi2.connect(
+    conn = sqlcipher_dbapi2.connect(
         opts.path,
         isolation_level=SQLITE_ISOLATION_LEVEL,
         check_same_thread=SQLITE_CHECK_SAME_THREAD)
+    init_crypto(conn, opts, extra_queries=on_init)
 
-    pragmas.set_crypto_pragmas(db_handle, opts)
-    pragmas.set_write_ahead_logging(db_handle)
-
-    if sync_off:
-        pragmas.set_synchronous_off(db_handle)
-    else:
-        pragmas.set_synchronous_normal(db_handle)
-    if memstore:
-        pragmas.set_mem_temp_store(db_handle)
-
-    for query in on_init:
-        db_handle.cursor().execute(on_init)
-
-    return db_handle
+    return conn
 
 
 class SQLCipherOptions(object):
@@ -286,7 +292,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         except sqlcipher_dbapi2.DatabaseError:
             # assert that we can access it using SQLCipher with the given
             # key
-            dummy_query = 'SELECT count(*) FROM sqlite_master'
+            dummy_query = ('SELECT count(*) FROM sqlite_master',)
             initialize_sqlcipher_db(opts, on_init=dummy_query)
         else:
             raise DatabaseIsNotEncrypted()

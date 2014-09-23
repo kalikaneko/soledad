@@ -17,7 +17,6 @@
 """
 An asyncrhonous interface to soledad using sqlcipher backend.
 It uses twisted.enterprise.adbapi.
-
 """
 import os
 import sys
@@ -25,31 +24,24 @@ import sys
 from twisted.enterprise import adbapi
 from twisted.python import log
 
+
 DEBUG_SQL = os.environ.get("LEAP_DEBUG_SQL")
 if DEBUG_SQL:
     log.startLogging(sys.stdout)
 
 
-def getConnectionPool(db=None, key=None):
-    return SQLCipherConnectionPool(
-        "pysqlcipher.dbapi2", database=db, key=key, check_same_thread=False)
+def getConnectionPool(opts, openfun=None):
+    return adbapi.ConnectionPool(
+        "pysqlcipher.dbapi2", database=opts.path, key=opts.key,
+        check_same_thread=False, openfun=openfun)
 
 
+"""
 class SQLCipherConnectionPool(adbapi.ConnectionPool):
 
     key = None
 
     def connect(self):
-        """
-        Return a database connection when one becomes available.
-
-        This method blocks and should be run in a thread from the internal
-        threadpool. Don't call this method directly from non-threaded code.
-        Using this method outside the external threadpool may exceed the
-        maximum number of connections in the pool.
-
-        :return: a database connection from the pool.
-        """
         self.noisy = DEBUG_SQL
 
         tid = self.threadID()
@@ -77,3 +69,4 @@ class SQLCipherConnectionPool(adbapi.ConnectionPool):
                 self.openfun(conn)
             self.connections[tid] = conn
         return conn
+"""
