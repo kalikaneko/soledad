@@ -57,11 +57,13 @@ from u1db.backends import sqlite_backend
 from u1db import errors as u1db_errors
 from taskthread import TimerTask
 
-from leap.soledad.client.crypto import SyncEncrypterPool, SyncDecrypterPool
+from leap.soledad.client import crypto
 from leap.soledad.client.target import SoledadSyncTarget
 from leap.soledad.client.target import PendingReceivedDocsSyncError
 from leap.soledad.client.sync import SoledadSynchronizer
-from leap.soledad.client.mp_safe_db import MPSafeSQLiteDB
+
+# TODO use adbapi too
+from leap.soledad.client.mp_safe_db_TOREMOVE import MPSafeSQLiteDB
 from leap.soledad.client import pragmas
 from leap.soledad.common import soledad_assert
 from leap.soledad.common.document import SoledadDocument
@@ -90,15 +92,48 @@ SQLITE_CHECK_SAME_THREAD = False
 SQLITE_ISOLATION_LEVEL = None
 
 
-# TODO accept cyrpto object too.... or pass it along..
+def initialize_sqlcipher_db(opts):
+    """
+    Initialize a SQLCipher database.
+    :param opts:
+    :type opts: SQLCipherOptions
+    :return: a SQLCipher connection
+    """
+    # TODO we used to have a lock for the initialization here.
+    # Is that really needed if we're going to have a threadpool?
+    # TODO we would accept an extra tuple of queries to execute when created
+    # (ie, CREATE IF NOT EXISTS...)
+
+    sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
+    memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
+
+    db_handle = sqlcipher_dbapi2.connect(
+        opts.path,
+        isolation_level=SQLITE_ISOLATION_LEVEL,
+        check_same_thread=SQLITE_CHECK_SAME_THREAD)
+
+    pragmas.set_crypto_pragmas(db_handle, opts)
+    pragmas.set_write_ahead_logging(db_handle)
+
+    if sync_off:
+        pragmas.set_synchronous_off(db_handle)
+    else:
+        pragmas.set_synchronous_normal(db_handle)
+    if memstore:
+        pragmas.set_mem_temp_store(db_handle)
+
+    return db_handle
+
+
 class SQLCipherOptions(object):
+    """
+    A container with options for the initialization of an SQLCipher database.
+    """
     def __init__(self, path, key, create=True, is_raw_key=False,
                  cipher='aes-256-cbc', kdf_iter=4000, cipher_page_size=1024,
                  document_factory=None,
                  defer_encryption=False, sync_db_key=None):
         """
-        Options for the initialization of an SQLCipher database.
-
         :param path: The filesystem path for the database to open.
         :type path: str
         :param create:
@@ -139,40 +174,39 @@ class SQLCipherOptions(object):
         self.document_factory = None
 
 
-# XXX Use SQLCIpherOptions instead
-#def open(path, password, create=True, document_factory=None, crypto=None,
-         #raw_key=False, cipher='aes-256-cbc', kdf_iter=4000,
-         #cipher_page_size=1024, defer_encryption=False, sync_db_key=None):
-    #"""
-    #Open a database at the given location.
+# def open(path, password, create=True, document_factory=None, crypto=None,
+# raw_key=False, cipher='aes-256-cbc', kdf_iter=4000,
+# cipher_page_size=1024, defer_encryption=False, sync_db_key=None):
+    # """
+    # Open a database at the given location.
 #
-    #*** IMPORTANT ***
+    # *** IMPORTANT ***
 #
-    #Don't forget to close the database after use by calling the close()
-    #method otherwise some resources might not be freed and you may experience
-    #several kinds of leakages.
+    # Don't forget to close the database after use by calling the close()
+    # method otherwise some resources might not be freed and you may experience
+    # several kinds of leakages.
 #
-    #*** IMPORTANT ***
+    # *** IMPORTANT ***
 #
-    #Will raise u1db.errors.DatabaseDoesNotExist if create=False and the
-    #database does not already exist.
+#   Will raise u1db.errors.DatabaseDoesNotExist if create=False and the
+#   database does not already exist.
 #
-    #:return: An instance of Database.
-    #:rtype SQLCipherDatabase
-    #"""
-    #args = (path, password)
-    #kwargs = {
-        #'create': create,
-        #'document_factory': document_factory,
-        #'crypto': crypto,
-        #'raw_key': raw_key,
-        #'cipher': cipher,
-        #'kdf_iter': kdf_iter,
-        #'cipher_page_size': cipher_page_size,
-        #'defer_encryption': defer_encryption,
-        #'sync_db_key': sync_db_key}
-    # XXX pass only a CryptoOptions object around
-    #return SQLCipherDatabase.open_database(*args, **kwargs)
+#   :return: An instance of Database.
+#   :rtype SQLCipherDatabase
+#   """
+#   args = (path, password)
+#   kwargs = {
+#       'create': create,
+#       'document_factory': document_factory,
+#       'crypto': crypto,
+#       'raw_key': raw_key,
+#       'cipher': cipher,
+#       'kdf_iter': kdf_iter,
+#       'cipher_page_size': cipher_page_size,
+#       'defer_encryption': defer_encryption,
+#       'sync_db_key': sync_db_key}
+# XXX pass only a CryptoOptions object around
+#    return SQLCipherDatabase.open_database(*args, **kwargs)
 
 
 #
@@ -189,34 +223,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
     k_lock = threading.Lock()
     create_doc_lock = threading.Lock()
     update_indexes_lock = threading.Lock()
-    _sync_watcher = None
-    _sync_enc_pool = None
 
-    """
-    The name of the local symmetrically encrypted documents to
-    sync database file.
-    """
-    LOCAL_SYMMETRIC_SYNC_FILE_NAME = 'sync.u1db'
-
-    """
-    A dictionary that hold locks which avoid multiple sync attempts from the
-    same database replica.
-    """
-    encrypting_lock = threading.Lock()
-
-    """
-    Period or recurrence of the periodic encrypting task, in seconds.
-    """
-    ENCRYPT_TASK_PERIOD = 1
-
-    syncing_lock = defaultdict(threading.Lock)
-    """
-    A dictionary that hold locks which avoid multiple sync attempts from the
-    same database replica.
-    """
-
-    # XXX Use SQLCIpherOptions instead
-    def __init__(self, opts):
+    def __init__(self, soledad_crypto, opts):
         """
         Connect to an existing SQLCipher database, creating a new sqlcipher
         database file if needed.
@@ -229,62 +237,26 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
 
         *** IMPORTANT ***
 
+        :param soledad_crypto:
+        :type soldead_crypto:
         :param opts:
         :type opts: SQLCipherOptions
         """
         # ensure the db is encrypted if the file already exists
-        if os.path.exists(opts.sqlcipher_file):
+        if os.path.exists(opts.path):
             self.assert_db_is_encrypted(opts)
 
         # connect to the sqlcipher database
         # XXX this lock should not be needed -----------------
         # u1db holds a mutex over sqlite internally for the initialization.
+
         with self.k_lock:
-            self._db_handle = sqlcipher_dbapi2.connect(
-
-        # TODO -----------------------------------------------
-        # move the init to a single function
-                opts.sqlcipher_file,
-                isolation_level=SQLITE_ISOLATION_LEVEL,
-                check_same_thread=SQLITE_CHECK_SAME_THREAD)
-            # set SQLCipher cryptographic parameters
-
-            # XXX allow optional deferredChain here ?
-            pragmas.set_crypto_pragmas(
-                self._db_handle, password, raw_key, cipher, kdf_iter,
-                cipher_page_size)
-            if os.environ.get('LEAP_SQLITE_NOSYNC'):
-                pragmas.set_synchronous_off(self._db_handle)
-            else:
-                pragmas.set_synchronous_normal(self._db_handle)
-            if os.environ.get('LEAP_SQLITE_MEMSTORE'):
-                pragmas.set_mem_temp_store(self._db_handle)
-            pragmas.set_write_ahead_logging(self._db_handle)
-
+            self._db_handle = initialize_sqlcipher_db(opts)
             self._real_replica_uid = None
             self._ensure_schema()
-            self._crypto = opts.crypto
 
-
-        # TODO ------------------------------------------------
-        # Move syncdb to another class ------------------------
-        # define sync-db attrs
-        self._sqlcipher_file = sqlcipher_file
-        self._sync_db_key = sync_db_key
-        self._sync_db = None
-        self._sync_db_write_lock = None
-        self._sync_enc_pool = None
-        self.sync_queue = None
-
-        if self.defer_encryption:
-            # initialize sync db
-            self._init_sync_db()
-            # initialize syncing queue encryption pool
-            self._sync_enc_pool = SyncEncrypterPool(
-                self._crypto, self._sync_db, self._sync_db_write_lock)
-            self._sync_watcher = TimerTask(self._encrypt_syncing_docs,
-                                           self.ENCRYPT_TASK_PERIOD)
-            self._sync_watcher.start()
+        self._crypto = soledad_crypto
+        self._sqlcipher_file = opts.path
 
         def factory(doc_id=None, rev=None, json='{}', has_conflicts=False,
                     syncable=True):
@@ -292,13 +264,6 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
                                    has_conflicts=has_conflicts,
                                    syncable=syncable)
         self.set_document_factory(factory)
-        # we store syncers in a dictionary indexed by the target URL. We also
-        # store a hash of the auth info in case auth info expires and we need
-        # to rebuild the syncer for that target. The final self._syncers
-        # format is the following:
-        #
-        #     self._syncers = {'<url>': ('<auth_hash>', syncer), ...}
-        self._syncers = {}
 
     def _extra_schema_init(self, c):
         """
@@ -315,36 +280,217 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             'ALTER TABLE document '
             'ADD COLUMN syncable BOOL NOT NULL DEFAULT TRUE')
 
+    #
+    # Document operations
+    #
+
+    def put_doc(self, doc):
+        """
+        Overwrite the put_doc method, to enqueue the modified document for
+        encryption before sync.
+
+        :param doc: The document to be put.
+        :type doc: u1db.Document
+
+        :return: The new document revision.
+        :rtype: str
+        """
+        doc_rev = sqlite_backend.SQLitePartialExpandDatabase.put_doc(self, doc)
+
+        # XXX move to API
+        if self.defer_encryption:
+            self.sync_queue.put_nowait(doc)
+        return doc_rev
+
+    #
+    # SQLCipher API methods
+    #
+
+    # TODO this doesn't need to be an instance method
+    def assert_db_is_encrypted(self, opts):
+        """
+        Assert that the sqlcipher file contains an encrypted database.
+
+        When opening an existing database, PRAGMA key will not immediately
+        throw an error if the key provided is incorrect. To test that the
+        database can be successfully opened with the provided key, it is
+        necessary to perform some operation on the database (i.e. read from
+        it) and confirm it is success.
+
+        The easiest way to do this is select off the sqlite_master table,
+        which will attempt to read the first page of the database and will
+        parse the schema.
+        """
+        # We try to open an encrypted database with the regular u1db
+        # backend should raise a DatabaseError exception.
+        # If the regular backend succeeds, then we need to stop because
+        # the database was not properly initialized.
+        try:
+            sqlite_backend.SQLitePartialExpandDatabase(opts.path)
+        except sqlcipher_dbapi2.DatabaseError:
+            # assert that we can access it using SQLCipher with the given
+            # key
+            with self.k_lock:
+                # XXX is this lock *really* needed??
+                # I think we should handle it the same that is donne in the
+                # open, with a start-transaction...
+                db_handle = initialize_sqlcipher_db(opts)
+                dummy_query = 'SELECT count(*) FROM sqlite_master'
+                db_handle.cursor().execute(dummy_query)
+        else:
+            raise DatabaseIsNotEncrypted()
+
+    # Extra query methods: extensions to the base sqlite implmentation.
+
+    def get_count_from_index(self, index_name, *key_values):
+        """
+        Returns the count for a given combination of index_name
+        and key values.
+
+        Extension method made from similar methods in u1db version 13.09
+
+        :param index_name: The index to query
+        :type index_name: str
+        :param key_values: values to match. eg, if you have
+                           an index with 3 fields then you would have:
+                           get_from_index(index_name, val1, val2, val3)
+        :type key_values: tuple
+        :return: count.
+        :rtype: int
+        """
+        c = self._db_handle.cursor()
+        definition = self._get_index_definition(index_name)
+
+        if len(key_values) != len(definition):
+            raise u1db_errors.InvalidValueForIndex()
+        tables = ["document_fields d%d" % i for i in range(len(definition))]
+        novalue_where = ["d.doc_id = d%d.doc_id"
+                         " AND d%d.field_name = ?"
+                         % (i, i) for i in range(len(definition))]
+        exact_where = [novalue_where[i]
+                       + (" AND d%d.value = ?" % (i,))
+                       for i in range(len(definition))]
+        args = []
+        where = []
+        for idx, (field, value) in enumerate(zip(definition, key_values)):
+            args.append(field)
+            where.append(exact_where[idx])
+            args.append(value)
+
+        tables = ["document_fields d%d" % i for i in range(len(definition))]
+        statement = (
+            "SELECT COUNT(*) FROM document d, %s WHERE %s " % (
+                ', '.join(tables),
+                ' AND '.join(where),
+            ))
+        try:
+            c.execute(statement, tuple(args))
+        except sqlcipher_dbapi2.OperationalError, e:
+            raise sqlcipher_dbapi2.OperationalError(
+                str(e) + '\nstatement: %s\nargs: %s\n' % (statement, args))
+        res = c.fetchall()
+        return res[0][0]
+
+    def close(self):
+        """
+        Close db connections.
+        """
+        # TODO should be handled by adbapi instead
+        # TODO syncdb should be stopped first
+
+        if logger is not None:  # logger might be none if called from __del__
+            logger.debug("SQLCipher backend: closing")
+
+        # close the actual database
+        if self._db_handle is not None:
+            self._db_handle.close()
+            self._db_handle = None
+
+    # indexes
+
+    def _put_and_update_indexes(self, old_doc, doc):
+        """
+        Update a document and all indexes related to it.
+
+        :param old_doc: The old version of the document.
+        :type old_doc: u1db.Document
+        :param doc: The new version of the document.
+        :type doc: u1db.Document
+        """
+        with self.update_indexes_lock:
+            sqlite_backend.SQLitePartialExpandDatabase._put_and_update_indexes(
+                self, old_doc, doc)
+            c = self._db_handle.cursor()
+            c.execute('UPDATE document SET syncable=? '
+                      'WHERE doc_id=?',
+                      (doc.syncable, doc.doc_id))
+
+    def _get_doc(self, doc_id, check_for_conflicts=False):
+        """
+        Get just the document content, without fancy handling.
+
+        :param doc_id: The unique document identifier
+        :type doc_id: str
+        :param include_deleted: If set to True, deleted documents will be
+            returned with empty content. Otherwise asking for a deleted
+            document will return None.
+        :type include_deleted: bool
+
+        :return: a Document object.
+        :type: u1db.Document
+        """
+        doc = sqlite_backend.SQLitePartialExpandDatabase._get_doc(
+            self, doc_id, check_for_conflicts)
+        if doc:
+            c = self._db_handle.cursor()
+            c.execute('SELECT syncable FROM document WHERE doc_id=?',
+                      (doc.doc_id,))
+            result = c.fetchone()
+            doc.syncable = bool(result[0])
+        return doc
+
+    def __del__(self):
+        """
+        Free resources when deleting or garbage collecting the database.
+
+        This is only here to minimze problems if someone ever forgets to call
+        the close() method after using the database; you should not rely on
+        garbage collecting to free up the database resources.
+        """
+        self.close()
+
+    @property
+    def replica_uid(self):
+        return self._get_replica_uid()
 
     # TODO ---- rescue the fix for the windows case from here...
-    #@classmethod
+    # @classmethod
     # XXX Use SQLCIpherOptions instead
-    #def _open_database(cls, sqlcipher_file, password, document_factory=None,
-                       #crypto=None, raw_key=False, cipher='aes-256-cbc',
-                       #kdf_iter=4000, cipher_page_size=1024,
-                       #defer_encryption=False, sync_db_key=None):
-        #"""
-        #Open a SQLCipher database.
+    # def _open_database(cls, sqlcipher_file, password, document_factory=None,
+        # crypto=None, raw_key=False, cipher='aes-256-cbc',
+        # kdf_iter=4000, cipher_page_size=1024,
+        # defer_encryption=False, sync_db_key=None):
+        # """
+        # Open a SQLCipher database.
 #
-        #:return: The database object.
-        #:rtype: SQLCipherDatabase
-        #"""
-        #cls.defer_encryption = defer_encryption
-        #if not os.path.isfile(sqlcipher_file):
-            #raise u1db_errors.DatabaseDoesNotExist()
+        # :return: The database object.
+        # :rtype: SQLCipherDatabase
+        # """
+        # cls.defer_encryption = defer_encryption
+        # if not os.path.isfile(sqlcipher_file):
+        #     raise u1db_errors.DatabaseDoesNotExist()
 #
-        #tries = 2
+        # tries = 2
         # Note: There seems to be a bug in sqlite 3.5.9 (with python2.6)
         #       where without re-opening the database on Windows, it
         #       doesn't see the transaction that was just committed
-        #while True:
+        # while True:
+            # with cls.k_lock:
+                # db_handle = dbapi2.connect(
+                    # sqlcipher_file,
+                    # check_same_thread=SQLITE_CHECK_SAME_THREAD)
 #
-            #with cls.k_lock:
-                #db_handle = dbapi2.connect(
-                    #sqlcipher_file,
-                    #check_same_thread=SQLITE_CHECK_SAME_THREAD)
-#
-                #try:
+                # try:
                     # set cryptographic params
 #
                     # XXX pass only a CryptoOptions object around
@@ -373,49 +519,103 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             #crypto=crypto, raw_key=raw_key, cipher=cipher, kdf_iter=kdf_iter,
             #cipher_page_size=cipher_page_size, sync_db_key=sync_db_key)
 
-    #@classmethod
-    #def open_database(cls, sqlcipher_file, password, create,
-                      #document_factory=None, crypto=None, raw_key=False,
-                      #cipher='aes-256-cbc', kdf_iter=4000,
-                      #cipher_page_size=1024, defer_encryption=False,
-                      #sync_db_key=None):
-        # XXX pass only a CryptoOptions object around
-        #"""
-        #Open a SQLCipher database.
-#
-        #*** IMPORTANT ***
-#
-        #Don't forget to close the database after use by calling the close()
-        #method otherwise some resources might not be freed and you may
-        #experience several kinds of leakages.
-#
-        #*** IMPORTANT ***
-#
-        #:return: The database object.
-        #:rtype: SQLCipherDatabase
-        #"""
-        #cls.defer_encryption = defer_encryption
-        #args = sqlcipher_file, password
-        #kwargs = {
-            #'crypto': crypto,
-            #'raw_key': raw_key,
-            #'cipher': cipher,
-            #'kdf_iter': kdf_iter,
-            #'cipher_page_size': cipher_page_size,
-            #'defer_encryption': defer_encryption,
-            #'sync_db_key': sync_db_key,
-            #'document_factory': document_factory,
-        #}
-        #try:
-            #return cls._open_database(*args, **kwargs)
-        #except u1db_errors.DatabaseDoesNotExist:
-            #if not create:
-                #raise
-#
-            # XXX here we were missing sync_db_key, intentional?
-            #return SQLCipherDatabase(*args, **kwargs)
 
-    # BEGIN SYNC FOO ----------------------------------------------------------
+class SQLCipherU1DBSync(object):
+
+    _sync_watcher = None
+    _sync_enc_pool = None
+
+    """
+    The name of the local symmetrically encrypted documents to
+    sync database file.
+    """
+    LOCAL_SYMMETRIC_SYNC_FILE_NAME = 'sync.u1db'
+
+    """
+    A dictionary that hold locks which avoid multiple sync attempts from the
+    same database replica.
+    """
+    encrypting_lock = threading.Lock()
+
+    """
+    Period or recurrence of the periodic encrypting task, in seconds.
+    """
+    ENCRYPT_TASK_PERIOD = 1
+
+    """
+    A dictionary that hold locks which avoid multiple sync attempts from the
+    same database replica.
+    """
+    syncing_lock = defaultdict(threading.Lock)
+
+    def _init_sync(self, opts, defer_encryption=False):
+
+        # TODO ----- have to decide what to do with syncer
+        self._sync_db_key = opts.sync_db_key
+        self._sync_db = None
+        self._sync_db_write_lock = None
+        self._sync_enc_pool = None
+        self.sync_queue = None
+
+        if self.defer_encryption:
+            # initialize sync db
+            self._init_sync_db()
+            # initialize syncing queue encryption pool
+            self._sync_enc_pool = crypto.SyncEncrypterPool(
+                self._crypto, self._sync_db, self._sync_db_write_lock)
+            self._sync_watcher = TimerTask(self._encrypt_syncing_docs,
+                                           self.ENCRYPT_TASK_PERIOD)
+            self._sync_watcher.start()
+
+        # TODO move to class attribute?
+        # we store syncers in a dictionary indexed by the target URL. We also
+        # store a hash of the auth info in case auth info expires and we need
+        # to rebuild the syncer for that target. The final self._syncers
+        # format is the following::
+        #
+        #  self._syncers = {'<url>': ('<auth_hash>', syncer), ...}
+        self._syncers = {}
+        self._sync_db_write_lock = threading.Lock()
+        self.sync_queue = multiprocessing.Queue()
+
+    def _init_sync_db(self, opts):
+        """
+        Initialize the Symmetrically-Encrypted document to be synced database,
+        and the queue to communicate with subprocess workers.
+
+        :param opts:
+        :type opts: SQLCipherOptions
+        """
+        soledad_assert(opts.sync_db_key is not None)
+        sync_db_path = None
+        if opts.path != ":memory:":
+            sync_db_path = "%s-sync" % opts.path
+        else:
+            sync_db_path = ":memory:"
+
+        # XXX use initialize_sqlcipher_db here too
+        self._sync_db = MPSafeSQLiteDB(sync_db_path)
+        pragmas.set_crypto_pragmas(self._sync_db, opts)
+
+        # create sync tables
+        self._create_sync_db_tables()
+
+    def _create_sync_db_tables(self):
+        """
+        Create tables for the local sync documents db if needed.
+        """
+        # TODO use adbapi ---------------------------------
+        # TODO pass queries to initialize_sqlcipher_db
+        encr = crypto.SyncEncrypterPool
+        decr = crypto.SyncDecrypterPool
+        sql_encr = ("CREATE TABLE IF NOT EXISTS %s (%s)" % (
+            encr.TABLE_NAME, encr.FIELD_NAMES))
+        sql_decr = ("CREATE TABLE IF NOT EXISTS %s (%s)" % (
+            decr.TABLE_NAME, decr.FIELD_NAMES))
+
+        with self._sync_db_write_lock:
+            self._sync_db.execute(sql_encr)
+            self._sync_db.execute(sql_decr)
 
     def sync(self, url, creds=None, autocreate=True, defer_decryption=True):
         """
@@ -475,13 +675,13 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         Because of that, this method blocks until the syncing lock can be
         acquired.
         """
-        with SQLCipherDatabase.syncing_lock[self._get_replica_uid()]:
+        with self.syncing_lock[self._get_replica_uid()]:
             syncer = self._get_syncer(url, creds=creds)
             yield syncer
 
     @property
     def syncing(self):
-        lock = SQLCipherDatabase.syncing_lock[self._get_replica_uid()]
+        lock = self.syncing_lock[self._get_replica_uid()]
         acquired_lock = lock.acquire(False)
         if acquired_lock is False:
             return True
@@ -523,46 +723,6 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         syncer.num_inserted = 0
         return syncer
 
-    # END SYNC FOO ----------------------------------------------------------
-
-    def _init_sync_db(self):
-        """
-        Initialize the Symmetrically-Encrypted document to be synced database,
-        and the queue to communicate with subprocess workers.
-        """
-        if self._sync_db is None:
-            soledad_assert(self._sync_db_key is not None)
-            sync_db_path = None
-            if self._sqlcipher_file != ":memory:":
-                sync_db_path = "%s-sync" % self._sqlcipher_file
-            else:
-                sync_db_path = ":memory:"
-            self._sync_db = MPSafeSQLiteDB(sync_db_path)
-            # protect the sync db with a password
-            if self._sync_db_key is not None:
-                # XXX pass only a CryptoOptions object around
-                pragmas.set_crypto_pragmas(
-                    self._sync_db, self._sync_db_key, False,
-                    'aes-256-cbc', 4000, 1024)
-            self._sync_db_write_lock = threading.Lock()
-            self._create_sync_db_tables()
-            self.sync_queue = multiprocessing.Queue()
-
-    def _create_sync_db_tables(self):
-        """
-        Create tables for the local sync documents db if needed.
-        """
-        encr = SyncEncrypterPool
-        decr = SyncDecrypterPool
-        sql_encr = ("CREATE TABLE IF NOT EXISTS %s (%s)" % (
-            encr.TABLE_NAME, encr.FIELD_NAMES))
-        sql_decr = ("CREATE TABLE IF NOT EXISTS %s (%s)" % (
-            decr.TABLE_NAME, decr.FIELD_NAMES))
-
-        with self._sync_db_write_lock:
-            self._sync_db.execute(sql_encr)
-            self._sync_db.execute(sql_decr)
-
     #
     # Symmetric encryption of syncing docs
     #
@@ -592,182 +752,10 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             finally:
                 lock.release()
 
-    #
-    # Document operations
-    #
-
-    def put_doc(self, doc):
-        """
-        Overwrite the put_doc method, to enqueue the modified document for
-        encryption before sync.
-
-        :param doc: The document to be put.
-        :type doc: u1db.Document
-
-        :return: The new document revision.
-        :rtype: str
-        """
-        doc_rev = sqlite_backend.SQLitePartialExpandDatabase.put_doc(self, doc)
-        if self.defer_encryption:
-            self.sync_queue.put_nowait(doc)
-        return doc_rev
-
-    # indexes
-
-    def _put_and_update_indexes(self, old_doc, doc):
-        """
-        Update a document and all indexes related to it.
-
-        :param old_doc: The old version of the document.
-        :type old_doc: u1db.Document
-        :param doc: The new version of the document.
-        :type doc: u1db.Document
-        """
-        with self.update_indexes_lock:
-            sqlite_backend.SQLitePartialExpandDatabase._put_and_update_indexes(
-                self, old_doc, doc)
-            c = self._db_handle.cursor()
-            c.execute('UPDATE document SET syncable=? '
-                      'WHERE doc_id=?',
-                      (doc.syncable, doc.doc_id))
-
-    def _get_doc(self, doc_id, check_for_conflicts=False):
-        """
-        Get just the document content, without fancy handling.
-
-        :param doc_id: The unique document identifier
-        :type doc_id: str
-        :param include_deleted: If set to True, deleted documents will be
-            returned with empty content. Otherwise asking for a deleted
-            document will return None.
-        :type include_deleted: bool
-
-        :return: a Document object.
-        :type: u1db.Document
-        """
-        doc = sqlite_backend.SQLitePartialExpandDatabase._get_doc(
-            self, doc_id, check_for_conflicts)
-        if doc:
-            c = self._db_handle.cursor()
-            c.execute('SELECT syncable FROM document WHERE doc_id=?',
-                      (doc.doc_id,))
-            result = c.fetchone()
-            doc.syncable = bool(result[0])
-        return doc
-
-    #
-    # SQLCipher API methods
-    #
-
-    # XXX Use SQLCIpherOptions instead
-    @classmethod
-    def assert_db_is_encrypted(cls, sqlcipher_file, key, raw_key, cipher,
-                               kdf_iter, cipher_page_size):
-        """
-        Assert that C{sqlcipher_file} contains an encrypted database.
-
-        When opening an existing database, PRAGMA key will not immediately
-        throw an error if the key provided is incorrect. To test that the
-        database can be successfully opened with the provided key, it is
-        necessary to perform some operation on the database (i.e. read from
-        it) and confirm it is success.
-
-        The easiest way to do this is select off the sqlite_master table,
-        which will attempt to read the first page of the database and will
-        parse the schema.
-
-        :param sqlcipher_file: The path for the SQLCipher file.
-        :type sqlcipher_file: str
-        :param key: The key that protects the SQLCipher db.
-        :type key: str
-        :param raw_key: Whether C{key} is a raw 64-char hex string or a
-            passphrase that should be hashed to obtain the encyrption key.
-        :type raw_key: bool
-        :param cipher: The cipher and mode to use.
-        :type cipher: str
-        :param kdf_iter: The number of iterations to use.
-        :type kdf_iter: int
-        :param cipher_page_size: The page size.
-        :type cipher_page_size: int
-        """
-        try:
-            # try to open an encrypted database with the regular u1db
-            # backend should raise a DatabaseError exception.
-            sqlite_backend.SQLitePartialExpandDatabase(sqlcipher_file)
-            raise DatabaseIsNotEncrypted()
-        except sqlcipher_dbapi2.DatabaseError:
-            # assert that we can access it using SQLCipher with the given
-            # key
-            with cls.k_lock:
-                db_handle = sqlcipher_dbapi2.connect(
-                    sqlcipher_file,
-                    isolation_level=SQLITE_ISOLATION_LEVEL,
-                    check_same_thread=SQLITE_CHECK_SAME_THREAD)
-                pragmas.set_crypto_pragmas(
-                    db_handle, key, raw_key, cipher,
-                    kdf_iter, cipher_page_size)
-                db_handle.cursor().execute(
-                    'SELECT count(*) FROM sqlite_master')
-
-    # Extra query methods: extensions to the base sqlite implmentation.
-
-    def get_count_from_index(self, index_name, *key_values):
-        """
-        Returns the count for a given combination of index_name
-        and key values.
-
-        Extension method made from similar methods in u1db version 13.09
-
-        :param index_name: The index to query
-        :type index_name: str
-        :param key_values: values to match. eg, if you have
-                           an index with 3 fields then you would have:
-                           get_from_index(index_name, val1, val2, val3)
-        :type key_values: tuple
-        :return: count.
-        :rtype: int
-        """
-        c = self._db_handle.cursor()
-        definition = self._get_index_definition(index_name)
-
-        if len(key_values) != len(definition):
-            raise u1db_errors.InvalidValueForIndex()
-        tables = ["document_fields d%d" % i for i in range(len(definition))]
-        novalue_where = ["d.doc_id = d%d.doc_id"
-                         " AND d%d.field_name = ?"
-                         % (i, i) for i in range(len(definition))]
-        exact_where = [novalue_where[i]
-                       + (" AND d%d.value = ?" % (i,))
-                       for i in range(len(definition))]
-        args = []
-        where = []
-        for idx, (field, value) in enumerate(zip(definition, key_values)):
-            args.append(field)
-            where.append(exact_where[idx])
-            args.append(value)
-
-        tables = ["document_fields d%d" % i for i in range(len(definition))]
-        statement = (
-            "SELECT COUNT(*) FROM document d, %s WHERE %s " % (
-                ', '.join(tables),
-                ' AND '.join(where),
-            ))
-        try:
-            c.execute(statement, tuple(args))
-        except sqlcipher_dbapi2.OperationalError, e:
-            raise sqlcipher_dbapi2.OperationalError(
-                str(e) + '\nstatement: %s\nargs: %s\n' % (statement, args))
-        res = c.fetchall()
-        return res[0][0]
-
     def close(self):
         """
-        Close db_handle and close syncer.
+        Close the syncer and syncdb orderly
         """
-        # TODO separate db from syncers --------------
-
-        if logger is not None:  # logger might be none if called from __del__
-            logger.debug("Sqlcipher backend: closing")
         # stop the sync watcher for deferred encryption
         if self._sync_watcher is not None:
             self._sync_watcher.stop()
@@ -782,12 +770,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         if self._sync_enc_pool is not None:
             self._sync_enc_pool.close()
             self._sync_enc_pool = None
-        # close the actual database
-        if self._db_handle is not None:
-            self._db_handle.close()
-            self._db_handle = None
 
-        # ---------------------------------------
         # close the sync database
         if self._sync_db is not None:
             self._sync_db.close()
@@ -797,20 +780,6 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             self.sync_queue.close()
             del self.sync_queue
             self.sync_queue = None
-
-    def __del__(self):
-        """
-        Free resources when deleting or garbage collecting the database.
-
-        This is only here to minimze problems if someone ever forgets to call
-        the close() method after using the database; you should not rely on
-        garbage collecting to free up the database resources.
-        """
-        self.close()
-
-    @property
-    def replica_uid(self):
-        return self._get_replica_uid()
 
 #
 # Exceptions

@@ -53,9 +53,8 @@ from leap.soledad.client import events as soledad_events
 from leap.soledad.client.crypto import SoledadCrypto
 from leap.soledad.client.secrets import SoledadSecrets
 from leap.soledad.client.shared_db import SoledadSharedDatabase
-from leap.soledad.client.sqlcipher import SQLCipherDatabase
 from leap.soledad.client.target import SoledadSyncTarget
-from leap.soledad.client.sqlcipher import SQLCipherDB, SQLCipherOptions
+from leap.soledad.client.sqlcipher import SQLCipherDatabase, SQLCipherOptions
 
 logger = logging.getLogger(name=__name__)
 
@@ -269,10 +268,9 @@ class Soledad(object):
             create=True,
             defer_encryption=self._defer_encryption,
             sync_db_key=sync_db_key,
-            crypto=self._crypto,  # XXX add this
             document_factory=SoledadDocument,
         )
-        self._db = SQLCipherDB(opts)
+        self._db = SQLCipherDatabase(self._crypto, opts)
 
     def close(self):
         """

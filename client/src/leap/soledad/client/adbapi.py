@@ -63,6 +63,8 @@ class SQLCipherConnectionPool(adbapi.ConnectionPool):
                 log.msg('adbapi connecting: %s %s%s' % (self.dbapiName,
                                                         self.connargs or '',
                                                         self.connkw or ''))
+
+            # ----------------------------------------------------
             conn = self.dbapi.connect(*self.connargs, **self.connkw)
 
             # XXX we should hook here all OUR SOLEDAD pragmas -----
