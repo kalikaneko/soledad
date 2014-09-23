@@ -92,17 +92,18 @@ SQLITE_CHECK_SAME_THREAD = False
 SQLITE_ISOLATION_LEVEL = None
 
 
-def initialize_sqlcipher_db(opts):
+def initialize_sqlcipher_db(opts, on_init=None):
     """
     Initialize a SQLCipher database.
     :param opts:
     :type opts: SQLCipherOptions
+    :param on_init: a tuple of queries to be executed on initialization
+    :type on_init: tuple
     :return: a SQLCipher connection
     """
     # TODO we used to have a lock for the initialization here.
     # Is that really needed if we're going to have a threadpool?
-    # TODO we would accept an extra tuple of queries to execute when created
-    # (ie, CREATE IF NOT EXISTS...)
+    on_init = [] if on_init is None else on_init
 
     sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
     memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
@@ -121,6 +122,9 @@ def initialize_sqlcipher_db(opts):
         pragmas.set_synchronous_normal(db_handle)
     if memstore:
         pragmas.set_mem_temp_store(db_handle)
+
+    for query in on_init:
+        db_handle.cursor().execute(on_init)
 
     return db_handle
 
@@ -332,11 +336,8 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
             # key
             with self.k_lock:
                 # XXX is this lock *really* needed??
-                # I think we should handle it the same that is donne in the
-                # open, with a start-transaction...
-                db_handle = initialize_sqlcipher_db(opts)
                 dummy_query = 'SELECT count(*) FROM sqlite_master'
-                db_handle.cursor().execute(dummy_query)
+                db_handle = initialize_sqlcipher_db(opts, on_init=dummy_query)
         else:
             raise DatabaseIsNotEncrypted()
 
@@ -594,6 +595,7 @@ class SQLCipherU1DBSync(object):
             sync_db_path = ":memory:"
 
         # XXX use initialize_sqlcipher_db here too
+        # TODO pass on_init queries to initialize_sqlcipher_db
         self._sync_db = MPSafeSQLiteDB(sync_db_path)
         pragmas.set_crypto_pragmas(self._sync_db, opts)
 
@@ -605,7 +607,6 @@ class SQLCipherU1DBSync(object):
         Create tables for the local sync documents db if needed.
         """
         # TODO use adbapi ---------------------------------
-        # TODO pass queries to initialize_sqlcipher_db
         encr = crypto.SyncEncrypterPool
         decr = crypto.SyncDecrypterPool
         sql_encr = ("CREATE TABLE IF NOT EXISTS %s (%s)" % (
