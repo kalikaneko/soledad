@@ -92,29 +92,6 @@ SQLITE_CHECK_SAME_THREAD = False
 SQLITE_ISOLATION_LEVEL = None
 
 
-def init_crypto(conn, opts=None, extra_queries=None):
-
-    assert opts is not None
-
-    extra_queries = [] if extra_queries is None else extra_queries
-
-    sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
-    memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
-
-    pragmas.set_crypto_pragmas(conn, opts)
-    pragmas.set_write_ahead_logging(conn)
-
-    if sync_off:
-        pragmas.set_synchronous_off(conn)
-    else:
-        pragmas.set_synchronous_normal(conn)
-    if memstore:
-        pragmas.set_mem_temp_store(conn)
-
-    for query in extra_queries:
-        conn.cursor().execute(query)
-
-
 def initialize_sqlcipher_db(opts, on_init=None):
     """
     Initialize a SQLCipher database.
@@ -135,6 +112,25 @@ def initialize_sqlcipher_db(opts, on_init=None):
     init_crypto(conn, opts, extra_queries=on_init)
 
     return conn
+
+
+def init_crypto(conn, opts=None, extra_queries=None):
+    assert opts is not None
+    extra_queries = [] if extra_queries is None else extra_queries
+    sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
+    memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
+
+    pragmas.set_crypto_pragmas(conn, opts)
+    pragmas.set_write_ahead_logging(conn)
+    if sync_off:
+        pragmas.set_synchronous_off(conn)
+    else:
+        pragmas.set_synchronous_normal(conn)
+    if memstore:
+        pragmas.set_mem_temp_store(conn)
+
+    for query in extra_queries:
+        conn.cursor().execute(query)
 
 
 class SQLCipherOptions(object):
@@ -211,17 +207,16 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         :param opts:
         :type opts: SQLCipherOptions
         """
+        # TODO ------ we don't need any soledad crypto in here
+
         # ensure the db is encrypted if the file already exists
         if os.path.isfile(opts.path):
             self.assert_db_is_encrypted(opts)
 
         # connect to the sqlcipher database
-
         self._db_handle = initialize_sqlcipher_db(opts)
+        self._real_replica_uid = None
         self._ensure_schema()
-
-        self._crypto = soledad_crypto
-        self._sqlcipher_file = opts.path
 
         self.set_document_factory(soledad_doc_factory)
 
@@ -297,7 +292,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         else:
             raise DatabaseIsNotEncrypted()
 
-    # Extra query methods: extensions to the base sqlite implmentation.
+    # Extra query methods: extensions to the base u1db sqlite implmentation.
 
     def get_count_from_index(self, index_name, *key_values):
         """
@@ -501,7 +496,9 @@ class SQLCipherU1DBSync(object):
     """
     syncing_lock = defaultdict(threading.Lock)
 
-    def _init_sync(self, opts, defer_encryption=False):
+    def _init_sync(self, opts, soledad_crypto, defer_encryption=False):
+
+        self._crypto = soledad_crypto
 
         # TODO ----- have to decide what to do with syncer
         self._sync_db_key = opts.sync_db_key

@@ -36,37 +36,55 @@ def getConnectionPool(opts, openfun=None):
         check_same_thread=False, openfun=openfun)
 
 
-"""
-class SQLCipherConnectionPool(adbapi.ConnectionPool):
+# XXX work in progress --------------------------------------------
 
-    key = None
 
-    def connect(self):
-        self.noisy = DEBUG_SQL
+class U1DBSqliteWrapper(sqlite_backend.SQLitePartialExpandDatabase):
 
-        tid = self.threadID()
-        conn = self.connections.get(tid)
+    def __init__(self, conn):
+        self._db_handle = conn
+        self._real_replica_uid = None
+        self._ensure_schema()
+        self._factory = u1db.Document
 
-        if self.key is None:
-            self.key = self.connkw.pop('key', None)
 
-        if conn is None:
-            if self.noisy:
-                log.msg('adbapi connecting: %s %s%s' % (self.dbapiName,
-                                                        self.connargs or '',
-                                                        self.connkw or ''))
+class U1DBConnection(adbapi.Connection):
 
-            # ----------------------------------------------------
-            conn = self.dbapi.connect(*self.connargs, **self.connkw)
+    def __init__(self, *args):
+        adbapi.Connection.__init__(self, *args)
 
-            # XXX we should hook here all OUR SOLEDAD pragmas -----
-            conn.cursor().execute("PRAGMA key=%s" % self.key)
-            conn.commit()
-            # -----------------------------------------------------
-            # XXX profit of openfun isntead???
+    def reconnect(self):
+        if self._connection is not None:
+            self._pool.disconnect(self._connection)
+        self._connection = self._pool.connect()
+        self._u1db = U1DBSqliteWrapper(self._connection)
 
-            if self.openfun is not None:
-                self.openfun(conn)
-            self.connections[tid] = conn
-        return conn
-"""
+    def __getattr__(self, name):
+        if name.startswith('u1db_'):
+            return getattr(self._u1db, name.strip('u1db_'))
+        else:
+            return getattr(self._connection, name)
+
+
+class U1DBTransaction(adbapi.Transaction):
+
+    def __getattr__(self, name):
+        preffix = "u1db_"
+        if name.startswith(preffix):
+            return getattr(self._connection._u1db, name.strip(preffix))
+        else:
+            return getattr(self._cursor, name)
+
+
+class U1DBConnectionPool(adbapi.ConnectionPool):
+
+    connectionFactory = U1DBConnection
+    transactionFactory = U1DBTransaction
+
+    def runU1DBQuery(self, meth, *args, **kw):
+        meth = "u1db_%s" % meth
+        return self.runInteraction(self._runU1DBQuery, meth, *args, **kw)
+
+    def _runU1DBQuery(self, trans, meth, *args, **kw):
+        meth = getattr(trans, meth)
+        return meth(*args, **kw)
