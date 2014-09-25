@@ -89,6 +89,7 @@ SQLITE_CHECK_SAME_THREAD = False
 # trying to open new transactions
 # (The error was:
 # OperationalError:cannot start a transaction within a transaction.)
+# XXX can get rid of this one already? ---- test against debian package
 SQLITE_ISOLATION_LEVEL = None
 
 
@@ -107,7 +108,7 @@ def initialize_sqlcipher_db(opts, on_init=None):
 
     conn = sqlcipher_dbapi2.connect(
         opts.path,
-        isolation_level=SQLITE_ISOLATION_LEVEL,
+        #isolation_level=SQLITE_ISOLATION_LEVEL,
         check_same_thread=SQLITE_CHECK_SAME_THREAD)
     init_crypto(conn, opts, extra_queries=on_init)
 
@@ -115,13 +116,19 @@ def initialize_sqlcipher_db(opts, on_init=None):
 
 
 def init_crypto(conn, opts=None, extra_queries=None):
+    # XXX we're lying a little, this not only inits crypto
+    # but also set other pragmas. either change the name or
+    # split in two functions.
     assert opts is not None
     extra_queries = [] if extra_queries is None else extra_queries
     sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
     memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
+    nowal = os.environ.get('LEAP_SQLITE_NOWAL')
 
     pragmas.set_crypto_pragmas(conn, opts)
-    pragmas.set_write_ahead_logging(conn)
+
+    if not nowal:
+        pragmas.set_write_ahead_logging(conn)
     if sync_off:
         pragmas.set_synchronous_off(conn)
     else:
