@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# use_adbapi.py
+# use_api.py
 # Copyright (C) 2014 LEAP
 #
 # This program is free software: you can redistribute it and/or modify
@@ -15,46 +15,26 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
-Example of use of the asynchronous soledad api.
+Example of use of the soledad api.
 """
-from twisted.internet import defer, reactor
-
-from leap.soledad.client import adbapi
+from leap.soledad.client import sqlcipher
 from leap.soledad.client.sqlcipher import SQLCipherOptions
 
 opts = SQLCipherOptions('/tmp/test.soledad', "secret", create=True)
-dbpool = adbapi.getConnectionPool(opts)
+
+db = sqlcipher.SQLCipherDatabase(None, opts)
 
 
-def createDoc(doc):
-    return dbpool.runU1DBQuery("create_doc", doc)
-
-
-def getAllDocs():
-    return dbpool.runU1DBQuery("get_all_docs")
-
-
-def printResult(r):
-    print r.doc_id, r.content['number']
-
-
-def allDone(_):
+def allDone():
     print "ALLDONE"
-    reactor.stop()
 
-deferreds = []
 
 NUM = 10000
 
 for i in range(NUM):
     doc = {"number": i,
            "payload": open('manifest.phk').read()}
-    d = createDoc(doc)
-    d.addCallbacks(printResult, lambda e: e.printTraceback())
-    deferreds.append(d)
+    d = db.create_doc(doc)
+    print d.doc_id, d.content['number']
 
-
-all_done = defer.gatherResults(deferreds, consumeErrors=True)
-all_done.addCallback(allDone)
-
-reactor.run()
+allDone()

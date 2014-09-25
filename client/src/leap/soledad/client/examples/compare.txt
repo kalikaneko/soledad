@@ -1,0 +1,5 @@
+rm /tmp/test.soledad; time python use_api.py
+python use_api.py  10.76s user 3.10s system 5% cpu 3:52.24 total
+
+rm /tmp/test.soledad; time python use_adbapi.py
+python use_adbapi.py  12.47s user 2.67s system 35% cpu 42.508 total

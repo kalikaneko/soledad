@@ -231,6 +231,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
         :param c: The cursor for querying the database.
         :type c: dbapi2.cursor
         """
+        print "CALLING EXTRA SCHEMA INIT...."
         c.execute(
             'ALTER TABLE document '
             'ADD COLUMN syncable BOOL NOT NULL DEFAULT TRUE')
