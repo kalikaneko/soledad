@@ -22,11 +22,15 @@ import re
 import os
 import sys
 
+from functools import partial
+
 import u1db
 from u1db.backends import sqlite_backend
 
 from twisted.enterprise import adbapi
 from twisted.python import log
+
+from leap.soledad.client.sqlcipher import init_crypto
 
 
 DEBUG_SQL = os.environ.get("LEAP_DEBUG_SQL")
@@ -35,9 +39,11 @@ if DEBUG_SQL:
 
 
 def getConnectionPool(opts, openfun=None, driver="pysqlcipher"):
-    return adbapi.ConnectionPool(
-        "%s.dbapi2" % driver, database=opts.path, key=opts.key,
-        check_same_thread=False, openfun=openfun)
+    if openfun is None and driver == "pysqlcipher":
+        openfun = partial(init_crypto, opts=opts)
+    return U1DBConnectionPool(
+        "%s.dbapi2" % driver, database=opts.path,
+        check_same_thread=False, cp_openfun=openfun)
 
 
 # XXX work in progress --------------------------------------------

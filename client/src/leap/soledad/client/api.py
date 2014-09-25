@@ -34,7 +34,6 @@ import socket
 import ssl
 import urlparse
 
-
 try:
     import cchardet as chardet
 except ImportError:
@@ -221,8 +220,9 @@ class Soledad(object):
         """
         Bootstrap local Soledad instance.
 
-        :raise BootstrapSequenceError: Raised when the secret generation and
-            storage on server sequence has failed for some reason.
+        :raise BootstrapSequenceError:
+            Raised when the secret generation and storage on server sequence
+            has failed for some reason.
         """
         try:
             self._secrets.bootstrap()
@@ -255,8 +255,9 @@ class Soledad(object):
         Initialize the U1DB SQLCipher database for local storage.
 
         Currently, Soledad uses the default SQLCipher cipher, i.e.
-        'aes-256-cbc'. We use scrypt to derive a 256-bit encryption key and
-        uses the 'raw PRAGMA key' format to handle the key to SQLCipher.
+        'aes-256-cbc'. We use scrypt to derive a 256-bit encryption key,
+        and internally the SQLCipherDatabase initialization uses the 'raw
+        PRAGMA key' format to handle the key to SQLCipher.
         """
         tohex = binascii.b2a_hex
         # sqlcipher only accepts the hex version
@@ -265,8 +266,7 @@ class Soledad(object):
 
         opts = SQLCipherOptions(
             self._local_db_path, key,
-            is_raw_key=True,
-            create=True,
+            is_raw_key=True, create=True,
             defer_encryption=self._defer_encryption,
             sync_db_key=sync_db_key,
         )
