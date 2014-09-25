@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# sqlcipher.py
+# adbapi.py
 # Copyright (C) 2013, 2014 LEAP
 #
 # This program is free software: you can redistribute it and/or modify
@@ -18,8 +18,12 @@
 An asyncrhonous interface to soledad using sqlcipher backend.
 It uses twisted.enterprise.adbapi.
 """
+import re
 import os
 import sys
+
+import u1db
+from u1db.backends import sqlite_backend
 
 from twisted.enterprise import adbapi
 from twisted.python import log
@@ -30,9 +34,9 @@ if DEBUG_SQL:
     log.startLogging(sys.stdout)
 
 
-def getConnectionPool(opts, openfun=None):
+def getConnectionPool(opts, openfun=None, driver="pysqlcipher"):
     return adbapi.ConnectionPool(
-        "pysqlcipher.dbapi2", database=opts.path, key=opts.key,
+        "%s.dbapi2" % driver, database=opts.path, key=opts.key,
         check_same_thread=False, openfun=openfun)
 
 
@@ -40,6 +44,12 @@ def getConnectionPool(opts, openfun=None):
 
 
 class U1DBSqliteWrapper(sqlite_backend.SQLitePartialExpandDatabase):
+    """
+    A very simple wrapper around sqlcipher backend.
+
+    Instead of initializing the database on the fly, it just uses an existing
+    connection that is passed to it in the initializer.
+    """
 
     def __init__(self, conn):
         self._db_handle = conn
@@ -50,18 +60,24 @@ class U1DBSqliteWrapper(sqlite_backend.SQLitePartialExpandDatabase):
 
 class U1DBConnection(adbapi.Connection):
 
-    def __init__(self, *args):
-        adbapi.Connection.__init__(self, *args)
+    u1db_wrapper = U1DBSqliteWrapper
+
+    def __init__(self, pool, init_u1db=False):
+        self.init_u1db = init_u1db
+        adbapi.Connection.__init__(self, pool)
 
     def reconnect(self):
         if self._connection is not None:
             self._pool.disconnect(self._connection)
         self._connection = self._pool.connect()
-        self._u1db = U1DBSqliteWrapper(self._connection)
+
+        if self.init_u1db:
+            self._u1db = self.u1db_wrapper(self._connection)
 
     def __getattr__(self, name):
         if name.startswith('u1db_'):
-            return getattr(self._u1db, name.strip('u1db_'))
+            meth = re.sub('^u1db_', '', name)
+            return getattr(self._u1db, meth)
         else:
             return getattr(self._connection, name)
 
@@ -69,9 +85,9 @@ class U1DBConnection(adbapi.Connection):
 class U1DBTransaction(adbapi.Transaction):
 
     def __getattr__(self, name):
-        preffix = "u1db_"
-        if name.startswith(preffix):
-            return getattr(self._connection._u1db, name.strip(preffix))
+        if name.startswith('u1db_'):
+            meth = re.sub('^u1db_', '', name)
+            return getattr(self._connection._u1db, meth)
         else:
             return getattr(self._cursor, name)
 
@@ -81,6 +97,11 @@ class U1DBConnectionPool(adbapi.ConnectionPool):
     connectionFactory = U1DBConnection
     transactionFactory = U1DBTransaction
 
+    def __init__(self, *args, **kwargs):
+        adbapi.ConnectionPool.__init__(self, *args, **kwargs)
+        # all u1db connections, hashed by thread-id
+        self.u1dbconnections = {}
+
     def runU1DBQuery(self, meth, *args, **kw):
         meth = "u1db_%s" % meth
         return self.runInteraction(self._runU1DBQuery, meth, *args, **kw)
@@ -88,3 +109,37 @@ class U1DBConnectionPool(adbapi.ConnectionPool):
     def _runU1DBQuery(self, trans, meth, *args, **kw):
         meth = getattr(trans, meth)
         return meth(*args, **kw)
+
+    def _runInteraction(self, interaction, *args, **kw):
+        tid = self.threadID()
+        u1db = self.u1dbconnections.get(tid)
+        conn = self.connectionFactory(self, init_u1db=not bool(u1db))
+
+        if u1db is None:
+            self.u1dbconnections[tid] = conn._u1db
+        else:
+            conn._u1db = u1db
+
+        trans = self.transactionFactory(self, conn)
+        try:
+            result = interaction(trans, *args, **kw)
+            trans.close()
+            conn.commit()
+            return result
+        except:
+            excType, excValue, excTraceback = sys.exc_info()
+            try:
+                conn.rollback()
+            except:
+                log.err(None, "Rollback failed")
+            raise excType, excValue, excTraceback
+
+    def finalClose(self):
+        self.shutdownID = None
+        self.threadpool.stop()
+        self.running = False
+        for conn in self.connections.values():
+            self._close(conn)
+        for u1db in self.u1dbconnections.values():
+            self._close(u1db)
+        self.connections.clear()
