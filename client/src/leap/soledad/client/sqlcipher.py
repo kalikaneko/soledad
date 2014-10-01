@@ -81,46 +81,48 @@ sqlite_backend.dbapi2 = sqlcipher_dbapi2
 # See https://sqlite.org/threadsafe.html
 # and http://bugs.python.org/issue16509
 
-SQLITE_CHECK_SAME_THREAD = False
-
-# We set isolation_level to None to setup autocommit mode.
-# See: http://docs.python.org/2/library/sqlite3.html#controlling-transactions
-# This avoids problems with sequential operations using the same soledad object
-# trying to open new transactions
-# (The error was:
-# OperationalError:cannot start a transaction within a transaction.)
-# XXX can get rid of this one already? ---- test against debian package
-SQLITE_ISOLATION_LEVEL = None
+# TODO this no longer needed -------------
+#SQLITE_CHECK_SAME_THREAD = False
 
 
 def initialize_sqlcipher_db(opts, on_init=None):
     """
     Initialize a SQLCipher database.
+
     :param opts:
     :type opts: SQLCipherOptions
     :param on_init: a tuple of queries to be executed on initialization
     :type on_init: tuple
     :return: a SQLCipher connection
     """
-    # TODO we used to have a lock for the initialization here.
-    # Is that really needed if we're going to have a threadpool?
-    # u1db holds a mutex over sqlite internally for the initialization...
-
     conn = sqlcipher_dbapi2.connect(
-        opts.path,
-        #isolation_level=SQLITE_ISOLATION_LEVEL,
-        check_same_thread=SQLITE_CHECK_SAME_THREAD)
-    init_crypto(conn, opts, extra_queries=on_init)
+        opts.path)
 
+    # XXX not needed -- check
+    #check_same_thread=SQLITE_CHECK_SAME_THREAD)
+
+    set_init_pragmas(conn, opts, extra_queries=on_init)
     return conn
 
+_db_init_lock = threading.Lock()
 
-def init_crypto(conn, opts=None, extra_queries=None):
-    # XXX we're lying a little, this not only inits crypto
-    # but also set other pragmas. either change the name or
-    # split in two functions.
+
+def set_init_pragmas(conn, opts=None, extra_queries=None):
+    """
+    Set the initialization pragmas.
+
+    This includes the crypto pragmas, and any other options that must
+    be passed early to sqlcipher db.
+    """
     assert opts is not None
     extra_queries = [] if extra_queries is None else extra_queries
+    with _db_init_lock:
+        # only one execution path should initialize the db
+        _set_init_pragmas(conn, opts, extra_queries)
+
+
+def _set_init_pragmas(conn, opts, extra_queries):
+
     sync_off = os.environ.get('LEAP_SQLITE_NOSYNC')
     memstore = os.environ.get('LEAP_SQLITE_MEMSTORE')
     nowal = os.environ.get('LEAP_SQLITE_NOWAL')

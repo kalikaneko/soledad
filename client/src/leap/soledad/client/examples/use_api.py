@@ -17,11 +17,23 @@
 """
 Example of use of the soledad api.
 """
+import os
+
 from leap.soledad.client import sqlcipher
 from leap.soledad.client.sqlcipher import SQLCipherOptions
 
-opts = SQLCipherOptions('/tmp/test.soledad', "secret", create=True)
+folder = os.environ.get("TMPDIR", "tmp")
+times = int(os.environ.get("TIMES", "1000"))
+tmpdb = os.path.join(folder, "test.soledad")
 
+print "[+] db path:", tmpdb
+print "[+] times", times
+
+if os.path.isfile(tmpdb):
+    print "[+] Removing existing db file..."
+    os.remove(tmpdb)
+
+opts = SQLCipherOptions(tmpdb, "secret", create=True)
 db = sqlcipher.SQLCipherDatabase(None, opts)
 
 
@@ -29,12 +41,12 @@ def allDone():
     print "ALLDONE"
 
 
-NUM = 10000
-
-for i in range(NUM):
+for i in range(times):
     doc = {"number": i,
            "payload": open('manifest.phk').read()}
     d = db.create_doc(doc)
     print d.doc_id, d.content['number']
+
+print "Count", len(db.get_all_docs()[1])
 
 allDone()

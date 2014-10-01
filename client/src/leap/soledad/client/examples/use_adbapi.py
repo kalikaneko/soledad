@@ -17,12 +17,26 @@
 """
 Example of use of the asynchronous soledad api.
 """
+import os
+
+import u1db
 from twisted.internet import defer, reactor
 
 from leap.soledad.client import adbapi
 from leap.soledad.client.sqlcipher import SQLCipherOptions
 
-opts = SQLCipherOptions('/tmp/test.soledad', "secret", create=True)
+folder = os.environ.get("TMPDIR", "tmp")
+times = int(os.environ.get("TIMES", "1000"))
+tmpdb = os.path.join(folder, "test.soledad")
+
+print "[+] db path:", tmpdb
+print "[+] times", times
+
+if os.path.isfile(tmpdb):
+    print "[+] Removing existing db file..."
+    os.remove(tmpdb)
+
+opts = SQLCipherOptions(tmpdb, "secret", create=True)
 dbpool = adbapi.getConnectionPool(opts)
 
 
@@ -34,19 +48,33 @@ def getAllDocs():
     return dbpool.runU1DBQuery("get_all_docs")
 
 
+def countDocs(_):
+    print "counting docs..."
+    d = getAllDocs()
+    d.addCallbacks(printResult, lambda e: e.printTraceback())
+    d.addBoth(allDone)
+
+
 def printResult(r):
-    print r.doc_id, r.content['number']
+    if isinstance(r, u1db.Document):
+        print r.doc_id, r.content['number']
+    else:
+        len_results = len(r[1])
+        print "GOT %s results" % len(r[1])
+
+        if len_results == times:
+            print "ALL GOOD"
+        else:
+            raise ValueError("We didn't expect this result len")
 
 
 def allDone(_):
-    print "ALLDONE"
+    print "ALL DONE!"
     reactor.stop()
 
 deferreds = []
 
-NUM = 10000
-
-for i in range(NUM):
+for i in range(times):
     doc = {"number": i,
            "payload": open('manifest.phk').read()}
     d = createDoc(doc)
@@ -55,6 +83,6 @@ for i in range(NUM):
 
 
 all_done = defer.gatherResults(deferreds, consumeErrors=True)
-all_done.addCallback(allDone)
+all_done.addCallback(countDocs)
 
 reactor.run()
