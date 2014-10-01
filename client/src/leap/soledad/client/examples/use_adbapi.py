@@ -17,6 +17,8 @@
 """
 Example of use of the asynchronous soledad api.
 """
+from __future__ import print_function
+import datetime
 import os
 
 import u1db
@@ -25,16 +27,26 @@ from twisted.internet import defer, reactor
 from leap.soledad.client import adbapi
 from leap.soledad.client.sqlcipher import SQLCipherOptions
 
+
 folder = os.environ.get("TMPDIR", "tmp")
 times = int(os.environ.get("TIMES", "1000"))
+silent = os.environ.get("SILENT", False)
+
 tmpdb = os.path.join(folder, "test.soledad")
 
-print "[+] db path:", tmpdb
-print "[+] times", times
+
+def debug(*args):
+    if not silent:
+        print(*args)
+
+debug("[+] db path:", tmpdb)
+debug("[+] times", times)
 
 if os.path.isfile(tmpdb):
-    print "[+] Removing existing db file..."
+    debug("[+] Removing existing db file...")
     os.remove(tmpdb)
+
+start_time = datetime.datetime.now()
 
 opts = SQLCipherOptions(tmpdb, "secret", create=True)
 dbpool = adbapi.getConnectionPool(opts)
@@ -49,7 +61,7 @@ def getAllDocs():
 
 
 def countDocs(_):
-    print "counting docs..."
+    debug("counting docs...")
     d = getAllDocs()
     d.addCallbacks(printResult, lambda e: e.printTraceback())
     d.addBoth(allDone)
@@ -57,19 +69,22 @@ def countDocs(_):
 
 def printResult(r):
     if isinstance(r, u1db.Document):
-        print r.doc_id, r.content['number']
+        debug(r.doc_id, r.content['number'])
     else:
         len_results = len(r[1])
-        print "GOT %s results" % len(r[1])
+        debug("GOT %s results" % len(r[1]))
 
         if len_results == times:
-            print "ALL GOOD"
+            debug("ALL GOOD")
         else:
             raise ValueError("We didn't expect this result len")
 
 
 def allDone(_):
-    print "ALL DONE!"
+    debug("ALL DONE!")
+    if silent:
+        end_time = datetime.datetime.now()
+        print((end_time - start_time).total_seconds())
     reactor.stop()
 
 deferreds = []

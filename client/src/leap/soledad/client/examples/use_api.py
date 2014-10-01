@@ -17,36 +17,51 @@
 """
 Example of use of the soledad api.
 """
+from __future__ import print_function
+import datetime
 import os
 
 from leap.soledad.client import sqlcipher
 from leap.soledad.client.sqlcipher import SQLCipherOptions
 
+
 folder = os.environ.get("TMPDIR", "tmp")
 times = int(os.environ.get("TIMES", "1000"))
+silent = os.environ.get("SILENT", False)
+
 tmpdb = os.path.join(folder, "test.soledad")
 
-print "[+] db path:", tmpdb
-print "[+] times", times
+
+def debug(*args):
+    if not silent:
+        print(*args)
+
+debug("[+] db path:", tmpdb)
+debug("[+] times", times)
 
 if os.path.isfile(tmpdb):
-    print "[+] Removing existing db file..."
+    debug("[+] Removing existing db file...")
     os.remove(tmpdb)
+
+start_time = datetime.datetime.now()
 
 opts = SQLCipherOptions(tmpdb, "secret", create=True)
 db = sqlcipher.SQLCipherDatabase(None, opts)
 
 
 def allDone():
-    print "ALLDONE"
+    debug("ALL DONE!")
 
 
 for i in range(times):
     doc = {"number": i,
            "payload": open('manifest.phk').read()}
     d = db.create_doc(doc)
-    print d.doc_id, d.content['number']
+    debug(d.doc_id, d.content['number'])
 
-print "Count", len(db.get_all_docs()[1])
+debug("Count", len(db.get_all_docs()[1]))
+if silent:
+    end_time = datetime.datetime.now()
+    print((end_time - start_time).total_seconds())
 
 allDone()
