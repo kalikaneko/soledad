@@ -41,6 +41,8 @@ except ImportError:
 
 from u1db.remote import http_client
 from u1db.remote.ssl_match_hostname import match_hostname
+from zope.interface import implements
+
 
 from leap.common.config import get_path_prefix
 from leap.soledad.common import SHARED_DB_NAME
@@ -49,6 +51,7 @@ from leap.soledad.common import soledad_assert_type
 
 from leap.soledad.client import adbapi
 from leap.soledad.client import events as soledad_events
+from leap.soledad.client.interfaces import ILocalStorage
 from leap.soledad.client.crypto import SoledadCrypto
 from leap.soledad.client.secrets import SoledadSecrets
 from leap.soledad.client.shared_db import SoledadSharedDatabase
@@ -61,16 +64,17 @@ logger = logging.getLogger(name=__name__)
 # Constants
 #
 
-SOLEDAD_CERT = None
 """
 Path to the certificate file used to certify the SSL connection between
 Soledad client and server.
 """
+SOLEDAD_CERT = None
 
 
 #
 # Soledad: local encrypted storage and remote encrypted sync.
 #
+
 
 class Soledad(object):
     """
@@ -104,21 +108,11 @@ class Soledad(object):
         SOLEDAD_DONE_DATA_SYNC: emitted inside C{sync()} method when it has
             finished synchronizing with remote replica.
     """
+    implements(ILocalStorage)
 
-    LOCAL_DATABASE_FILE_NAME = 'soledad.u1db'
-    """
-    The name of the local SQLCipher U1DB database file.
-    """
-
-    STORAGE_SECRETS_FILE_NAME = "soledad.json"
-    """
-    The name of the file where the storage secrets will be stored.
-    """
-
-    DEFAULT_PREFIX = os.path.join(get_path_prefix(), 'leap', 'soledad')
-    """
-    Prefix for default values for path.
-    """
+    local_db_file_name = 'soledad.u1db'
+    secrets_file_name = "soledad.json"
+    default_prefix = os.path.join(get_path_prefix(), 'leap', 'soledad')
 
     def __init__(self, uuid, passphrase, secrets_path, local_db_path,
                  server_url, cert_file,
@@ -129,40 +123,43 @@ class Soledad(object):
         :param uuid: User's uuid.
         :type uuid: str
 
-        :param passphrase: The passphrase for locking and unlocking encryption
-                           secrets for local and remote storage.
+        :param passphrase:
+            The passphrase for locking and unlocking encryption secrets for
+            local and remote storage.
         :type passphrase: unicode
 
-        :param secrets_path: Path for storing encrypted key used for
-                             symmetric encryption.
+        :param secrets_path:
+            Path for storing encrypted key used for symmetric encryption.
         :type secrets_path: str
 
         :param local_db_path: Path for local encrypted storage db.
         :type local_db_path: str
 
-        :param server_url: URL for Soledad server. This is used either to sync
-                           with the user's remote db and to interact with the
-                           shared recovery database.
+        :param server_url:
+            URL for Soledad server. This is used either to sync with the user's
+            remote db and to interact with the shared recovery database.
         :type server_url: str
 
-        :param cert_file: Path to the certificate of the ca used
-                          to validate the SSL certificate used by the remote
-                          soledad server.
+        :param cert_file:
+            Path to the certificate of the ca used to validate the SSL
+            certificate used by the remote soledad server.
         :type cert_file: str
 
-        :param auth_token: Authorization token for accessing remote databases.
+        :param auth_token:
+            Authorization token for accessing remote databases.
         :type auth_token: str
 
         :param secret_id: The id of the storage secret to be used.
         :type secret_id: str
 
-        :param defer_encryption: Whether to defer encryption/decryption of
-                                 documents, or do it inline while syncing.
+        :param defer_encryption:
+            Whether to defer encryption/decryption of documents, or do it
+            inline while syncing.
         :type defer_encryption: bool
 
-        :raise BootstrapSequenceError: Raised when the secret generation and
-                                       storage on server sequence has failed
-                                       for some reason.
+        :raise BootstrapSequenceError:
+            Raised when the secret generation and storage on server sequence
+            has failed for some reason.
         """
         # store config params
         self._uuid = uuid
@@ -180,37 +177,16 @@ class Soledad(object):
         self._init_dirs()
 
         # init crypto variables
-        self._shared_db_instance = None
         self._crypto = SoledadCrypto(self)
+        self._shared_db_instance = None
+
+        # XXX initialize with a different class
         self._secrets = SoledadSecrets(
-            self._uuid,
-            self._passphrase,
-            self._secrets_path,
-            self._shared_db,
-            self._crypto,
-            secret_id=secret_id)
+            uuid, passphrase, secrets_path,
+            self._shared_db, self._crypto, secret_id=secret_id)
 
         # initiate bootstrap sequence
         self._bootstrap()  # might raise BootstrapSequenceError()
-
-    def _init_config(self):
-        """
-        Initialize configuration using default values for missing params.
-        """
-        soledad_assert_type(self._passphrase, unicode)
-        initialize = lambda attr, val: attr is None and setattr(attr, val)
-
-        # initialize secrets_path
-        initialize(self._secrets_path, os.path.join(
-            self.DEFAULT_PREFIX, self.STORAGE_SECRETS_FILE_NAME))
-
-        # initialize local_db_path
-        initialize(self._local_db_path, os.path.join(
-            self.DEFAULT_PREFIX, self.LOCAL_DATABASE_FILE_NAME))
-
-        # initialize server_url
-        soledad_assert(self._server_url is not None,
-                       'Missing URL for Soledad server.')
 
     #
     # initialization/destruction methods
@@ -227,6 +203,25 @@ class Soledad(object):
         self._secrets.bootstrap()
         self._init_db()
         # XXX initialize syncers?
+
+    def _init_config(self):
+        """
+        Initialize configuration using default values for missing params.
+        """
+        soledad_assert_type(self._passphrase, unicode)
+        initialize = lambda attr, val: attr is None and setattr(attr, val)
+
+        # initialize secrets_path
+        initialize(self._secrets_path, os.path.join(
+            self.default_prefix, self.secrets_file_name))
+
+        # initialize local_db_path
+        initialize(self._local_db_path, os.path.join(
+            self.default_prefix, self.local_db_file_name))
+
+        # initialize server_url
+        soledad_assert(self._server_url is not None,
+                       'Missing URL for Soledad server.')
 
     def _init_dirs(self):
         """
@@ -287,303 +282,74 @@ class Soledad(object):
             # XXX stop syncers
             # self._db.stop_sync()
 
-    @property
-    def _shared_db(self):
-        """
-        Return an instance of the shared recovery database object.
-
-        :return: The shared database.
-        :rtype: SoledadSharedDatabase
-        """
-        if self._shared_db_instance is None:
-            self._shared_db_instance = SoledadSharedDatabase.open_database(
-                urlparse.urljoin(self.server_url, SHARED_DB_NAME),
-                self._uuid,
-                False,  # db should exist at this point.
-                creds=self._creds)
-        return self._shared_db_instance
-
     #
     # Document storage, retrieval and sync.
     #
 
     def put_doc(self, doc):
-        # TODO what happens with this warning during the deferred life cycle?
-        # Isn't it better to defend ourselves from the mutability, to avoid
-        # nasty surprises?
         """
-        Update a document in the local encrypted database.
-
         ============================== WARNING ==============================
         This method converts the document's contents to unicode in-place. This
         means that after calling `put_doc(doc)`, the contents of the
         document, i.e. `doc.content`, might be different from before the
         call.
         ============================== WARNING ==============================
-
-        :param doc: the document to update
-        :type doc: SoledadDocument
-
-        :return:
-            a deferred that will fire with the new revision identifier for
-            the document
-        :rtype: Deferred
         """
+        # TODO what happens with this warning during the deferred life cycle?
+        # Isn't it better to defend ourselves from the mutability, to avoid
+        # nasty surprises?
         doc.content = self._convert_to_unicode(doc.content)
         return self._dbpool.put_doc(doc)
 
     def delete_doc(self, doc):
-        """
-        Delete a document from the local encrypted database.
-
-        :param doc: the document to delete
-        :type doc: SoledadDocument
-
-        :return:
-            a deferred that will fire with ...
-        :rtype: Deferred
-        """
         # XXX what does this do when fired???
         return self._dbpool.delete_doc(doc)
 
     def get_doc(self, doc_id, include_deleted=False):
-        """
-        Retrieve a document from the local encrypted database.
-
-        :param doc_id: the unique document identifier
-        :type doc_id: str
-        :param include_deleted:
-            if True, deleted documents will be returned with empty content;
-            otherwise asking for a deleted document will return None
-        :type include_deleted: bool
-
-        :return:
-            A deferred that will fire with the document object, containing a
-            SoledadDocument, or None if it could not be found
-        :rtype: Deferred
-        """
         return self._dbpool.get_doc(doc_id, include_deleted=include_deleted)
 
     def get_docs(self, doc_ids, check_for_conflicts=True,
                  include_deleted=False):
-        """
-        Get the content for many documents.
-
-        :param doc_ids: a list of document identifiers
-        :type doc_ids: list
-        :param check_for_conflicts: if set False, then the conflict check will
-            be skipped, and 'None' will be returned instead of True/False
-        :type check_for_conflicts: bool
-
-        :return:
-            A deferred that will fire with an iterable giving the Document
-            object for each document id in matching doc_ids order.
-        :rtype: Deferred
-        """
-        return self._dbpool.get_docs(
-            doc_ids, check_for_conflicts=check_for_conflicts,
-            include_deleted=include_deleted)
+        return self._dbpool.get_docs(doc_ids,
+                                     check_for_conflicts=check_for_conflicts,
+                                     include_deleted=include_deleted)
 
     def get_all_docs(self, include_deleted=False):
-        """
-        Get the JSON content for all documents in the database.
-
-        :param include_deleted: If set to True, deleted documents will be
-                                returned with empty content. Otherwise deleted
-                                documents will not be included in the results.
-        :return:
-            A deferred that will fire with (generation, [Document]): that is,
-            the current generation of the database, followed by a list of all
-            the documents in the database.
-        :rtype: Deferred
-        """
         return self._dbpool.get_all_docs(include_deleted)
 
     def create_doc(self, content, doc_id=None):
-        """
-        Create a new document in the local encrypted database.
-
-        :param content: the contents of the new document
-        :type content: dict
-        :param doc_id: an optional identifier specifying the document id
-        :type doc_id: str
-
-        :return:
-            A deferred tht will fire with the new document (SoledadDocument
-            instance).
-        :rtype: Deferred
-        """
         return self._dbpool.create_doc(
             _convert_to_unicode(content), doc_id=doc_id)
 
     def create_doc_from_json(self, json, doc_id=None):
-        """
-        Create a new document.
-
-        You can optionally specify the document identifier, but the document
-        must not already exist. See 'put_doc' if you want to override an
-        existing document.
-        If the database specifies a maximum document size and the document
-        exceeds it, create will fail and raise a DocumentTooBig exception.
-
-        :param json: The JSON document string
-        :type json: str
-        :param doc_id: An optional identifier specifying the document id.
-        :type doc_id:
-        :return:
-            A deferred that will fire with the new document (A SoledadDocument
-            instance)
-        :rtype: Deferred
-        """
         return self._dbpool.create_doc_from_json(json, doc_id=doc_id)
 
     def create_index(self, index_name, *index_expressions):
-        """
-        Create an named index, which can then be queried for future lookups.
-        Creating an index which already exists is not an error, and is cheap.
-        Creating an index which does not match the index_expressions of the
-        existing index is an error.
-        Creating an index will block until the expressions have been evaluated
-        and the index generated.
-
-        :param index_name: A unique name which can be used as a key prefix
-        :type index_name: str
-        :param index_expressions:
-            index expressions defining the index information.
-        :type index_expressions: dict
-
-            Examples:
-
-            "fieldname", or "fieldname.subfieldname" to index alphabetically
-            sorted on the contents of a field.
-
-            "number(fieldname, width)", "lower(fieldname)"
-        """
         return self._dbpool.create_index(index_name, *index_expressions)
 
     def delete_index(self, index_name):
-        """
-        Remove a named index.
-
-        :param index_name: The name of the index we are removing
-        :type index_name: str
-        """
         return self._dbpool.delete_index(index_name)
 
     def list_indexes(self):
-        """
-        List the definitions of all known indexes.
-
-        :return: A list of [('index-name', ['field', 'field2'])] definitions.
-        :rtype: list
-        """
         return self._dbpool.list_indexes()
 
     def get_from_index(self, index_name, *key_values):
-        """
-        Return documents that match the keys supplied.
-
-        You must supply exactly the same number of values as have been defined
-        in the index. It is possible to do a prefix match by using '*' to
-        indicate a wildcard match. You can only supply '*' to trailing entries,
-        (eg 'val', '*', '*' is allowed, but '*', 'val', 'val' is not.)
-        It is also possible to append a '*' to the last supplied value (eg
-        'val*', '*', '*' or 'val', 'val*', '*', but not 'val*', 'val', '*')
-
-        :param index_name: The index to query
-        :type index_name: str
-        :param key_values: values to match. eg, if you have
-                           an index with 3 fields then you would have:
-                           get_from_index(index_name, val1, val2, val3)
-        :type key_values: tuple
-        :return: List of [Document]
-        :rtype: list
-        """
         return self._dbpool.get_from_index(index_name, *key_values)
 
     def get_count_from_index(self, index_name, *key_values):
-        """
-        Return the count of the documents that match the keys and
-        values supplied.
-
-        :param index_name: The index to query
-        :type index_name: str
-        :param key_values: values to match. eg, if you have
-                           an index with 3 fields then you would have:
-                           get_from_index(index_name, val1, val2, val3)
-        :type key_values: tuple
-        :return: count.
-        :rtype: int
-        """
         return self._dbpool.get_count_from_index(index_name, *key_values)
 
     def get_range_from_index(self, index_name, start_value, end_value):
-        """
-        Return documents that fall within the specified range.
-
-        Both ends of the range are inclusive. For both start_value and
-        end_value, one must supply exactly the same number of values as have
-        been defined in the index, or pass None. In case of a single column
-        index, a string is accepted as an alternative for a tuple with a single
-        value. It is possible to do a prefix match by using '*' to indicate
-        a wildcard match. You can only supply '*' to trailing entries, (eg
-        'val', '*', '*' is allowed, but '*', 'val', 'val' is not.) It is also
-        possible to append a '*' to the last supplied value (eg 'val*', '*',
-        '*' or 'val', 'val*', '*', but not 'val*', 'val', '*')
-
-        :param index_name: The index to query
-        :type index_name: str
-        :param start_values: tuples of values that define the lower bound of
-            the range. eg, if you have an index with 3 fields then you would
-            have: (val1, val2, val3)
-        :type start_values: tuple
-        :param end_values: tuples of values that define the upper bound of the
-            range. eg, if you have an index with 3 fields then you would have:
-            (val1, val2, val3)
-        :type end_values: tuple
-        :return: A deferred that will fire with a list of [Document]
-        :rtype: Deferred
-        """
         return self._dbpool.get_range_from_index(
             index_name, start_value, end_value)
 
     def get_index_keys(self, index_name):
-        """
-        Return all keys under which documents are indexed in this index.
-
-        :param index_name: The index to query
-        :type index_name: str
-        :return:
-            A deferred that will fire with a list of tuples of indexed keys.
-        :rtype: Deferred
-        """
         return self._dbpool.get_index_keys(index_name)
 
     def get_doc_conflicts(self, doc_id):
-        """
-        Get the list of conflicts for the given document.
-
-        :param doc_id: the document id
-        :type doc_id: str
-
-        :return:
-            A deferred that will fire with a list of the document entries that
-            are conflicted.
-        :rtype: Deferred
-        """
         return self._dbpool.get_doc_conflicts(doc_id)
 
     def resolve_doc(self, doc, conflicted_doc_revs):
-        """
-        Mark a document as no longer conflicted.
-
-        :param doc: a document with the new content to be inserted.
-        :type doc: SoledadDocument
-        :param conflicted_doc_revs:
-            A deferred that will fire with a list of revisions that the new
-            content supersedes.
-        :type conflicted_doc_revs: list
-        """
         return self._dbpool.resolve_doc(doc, conflicted_doc_revs)
 
     #
@@ -699,6 +465,22 @@ class Soledad(object):
 
     token = property(_get_token, _set_token, doc='The authentication Token.')
 
+    @property
+    def _shared_db(self):
+        """
+        Return an instance of the shared recovery database object.
+
+        :return: The shared database.
+        :rtype: SoledadSharedDatabase
+        """
+        if self._shared_db_instance is None:
+            self._shared_db_instance = SoledadSharedDatabase.open_database(
+                urlparse.urljoin(self.server_url, SHARED_DB_NAME),
+                self._uuid,
+                False,  # db should exist at this point.
+                creds=self._creds)
+        return self._shared_db_instance
+
     #
     # Setters/getters
     #
@@ -743,6 +525,10 @@ class Soledad(object):
     server_url = property(
         _get_server_url,
         doc='The URL of the Soledad server.')
+
+    #
+    # Secrets
+    #
 
     @property
     def storage_secret(self):
