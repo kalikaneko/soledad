@@ -74,16 +74,6 @@ logger = logging.getLogger(__name__)
 # Monkey-patch u1db.backends.sqlite_backend with pysqlcipher.dbapi2
 sqlite_backend.dbapi2 = sqlcipher_dbapi2
 
-# It seems that, as long as we are not using old sqlite versions, serialized
-# mode is enabled by default at compile time. So accessing db connections from
-# different threads should be safe, as long as no attempt is made to use them
-# from multiple threads with no locking.
-# See https://sqlite.org/threadsafe.html
-# and http://bugs.python.org/issue16509
-
-# TODO this no longer needed -------------
-#SQLITE_CHECK_SAME_THREAD = False
-
 
 def initialize_sqlcipher_db(opts, on_init=None):
     """
@@ -97,10 +87,6 @@ def initialize_sqlcipher_db(opts, on_init=None):
     """
     conn = sqlcipher_dbapi2.connect(
         opts.path)
-
-    # XXX not needed -- check
-    #check_same_thread=SQLITE_CHECK_SAME_THREAD)
-
     set_init_pragmas(conn, opts, extra_queries=on_init)
     return conn
 
@@ -220,7 +206,7 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
 
         # ensure the db is encrypted if the file already exists
         if os.path.isfile(opts.path):
-            self.assert_db_is_encrypted(opts)
+            _assert_db_is_encrypted(opts)
 
         # connect to the sqlcipher database
         self._db_handle = initialize_sqlcipher_db(opts)
@@ -270,37 +256,6 @@ class SQLCipherDatabase(sqlite_backend.SQLitePartialExpandDatabase):
     #
     # SQLCipher API methods
     #
-
-    # TODO this doesn't need to be an instance method
-    def assert_db_is_encrypted(self, opts):
-        """
-        Assert that the sqlcipher file contains an encrypted database.
-
-        When opening an existing database, PRAGMA key will not immediately
-        throw an error if the key provided is incorrect. To test that the
-        database can be successfully opened with the provided key, it is
-        necessary to perform some operation on the database (i.e. read from
-        it) and confirm it is success.
-
-        The easiest way to do this is select off the sqlite_master table,
-        which will attempt to read the first page of the database and will
-        parse the schema.
-
-        :param opts:
-        """
-        # We try to open an encrypted database with the regular u1db
-        # backend should raise a DatabaseError exception.
-        # If the regular backend succeeds, then we need to stop because
-        # the database was not properly initialized.
-        try:
-            sqlite_backend.SQLitePartialExpandDatabase(opts.path)
-        except sqlcipher_dbapi2.DatabaseError:
-            # assert that we can access it using SQLCipher with the given
-            # key
-            dummy_query = ('SELECT count(*) FROM sqlite_master',)
-            initialize_sqlcipher_db(opts, on_init=dummy_query)
-        else:
-            raise DatabaseIsNotEncrypted()
 
     # Extra query methods: extensions to the base u1db sqlite implmentation.
 
@@ -757,6 +712,37 @@ class SQLCipherU1DBSync(object):
             self.sync_queue.close()
             del self.sync_queue
             self.sync_queue = None
+
+
+def _assert_db_is_encrypted(opts):
+    """
+    Assert that the sqlcipher file contains an encrypted database.
+
+    When opening an existing database, PRAGMA key will not immediately
+    throw an error if the key provided is incorrect. To test that the
+    database can be successfully opened with the provided key, it is
+    necessary to perform some operation on the database (i.e. read from
+    it) and confirm it is success.
+
+    The easiest way to do this is select off the sqlite_master table,
+    which will attempt to read the first page of the database and will
+    parse the schema.
+
+    :param opts:
+    """
+    # We try to open an encrypted database with the regular u1db
+    # backend should raise a DatabaseError exception.
+    # If the regular backend succeeds, then we need to stop because
+    # the database was not properly initialized.
+    try:
+        sqlite_backend.SQLitePartialExpandDatabase(opts.path)
+    except sqlcipher_dbapi2.DatabaseError:
+        # assert that we can access it using SQLCipher with the given
+        # key
+        dummy_query = ('SELECT count(*) FROM sqlite_master',)
+        initialize_sqlcipher_db(opts, on_init=dummy_query)
+    else:
+        raise DatabaseIsNotEncrypted()
 
 #
 # Exceptions

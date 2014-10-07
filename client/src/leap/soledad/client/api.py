@@ -56,7 +56,7 @@ from leap.soledad.client.crypto import SoledadCrypto
 from leap.soledad.client.secrets import SoledadSecrets
 from leap.soledad.client.shared_db import SoledadSharedDatabase
 from leap.soledad.client.target import SoledadSyncTarget
-from leap.soledad.client.sqlcipher import SQLCipherOptions
+from leap.soledad.client.sqlcipher import SQLCipherOptions, SQLCipherU1DBSync
 
 logger = logging.getLogger(name=__name__)
 
@@ -178,11 +178,11 @@ class Soledad(object):
         self._init_config()
         self._init_dirs()
 
-        # initiate bootstrap sequence: this includes
-        # initialization of secrets, sqlcipher database and syncers
-        # It can raise BootstrapSequenceError, that will be propagated
-        # upwards.
-        self._bootstrap()
+        # The following can raise BootstrapSequenceError, that will be
+        # propagated upwards.
+        self._init_secrets()
+        self._init_u1db_sqlcipher_backend()
+        self._init_syncer()
 
     #
     # initialization/destruction methods
@@ -224,20 +224,6 @@ class Soledad(object):
                 else:
                     raise
 
-    def _bootstrap(self):
-        """
-        Bootstrap local Soledad instance.
-
-        :raise BootstrapSequenceError:
-            Raised when the secret generation and storage on server sequence
-            has failed for some reason.
-        """
-        self._init_secrets()
-        self._init_u1db_sqlcipher_backend()
-
-        # TODO init syncers ------------------------------------
-        # XXX initialize syncers?
-
     def _init_secrets(self):
         self._secrets = SoledadSecrets(
             self.uuid, self.passphrase, self.secrets_path,
@@ -267,7 +253,16 @@ class Soledad(object):
             defer_encryption=self._defer_encryption,
             sync_db_key=sync_db_key,
         )
+        self._soledad_opts = opts
         self._dbpool = adbapi.getConnectionPool(opts)
+
+    def _init_syncer(self):
+        self._dbsyncer = SQLCipherU1DBSync(
+            self._soledad_opts, self._crypto, self._defer_encryption)
+
+    #
+    # Closing methods
+    #
 
     def close(self):
         """
@@ -400,12 +395,11 @@ class Soledad(object):
     def stop_sync(self):
         self._dbsyncer.stop_sync()
 
-    # XXX used somwhere?
+    # XXX used somewhere?
+    # FIXME -------------------------------------------------------
+    # this needs either being converted to async or removed if not used
+    # or planned to be used from somewhere.
     def need_sync(self, url):
-        # XXX convert to async
-        # XXX pass the get_replica_uid ------------------------
-        # From where? initialize with that?
-
         # XXX dispatch this method in the dbpool .................
         replica_uid = self._dbpool.replica_uid
         target = SoledadSyncTarget(
