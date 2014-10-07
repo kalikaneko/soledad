@@ -22,12 +22,13 @@ from zope.interface import Interface, Attribute
 
 class ILocalStorage(Interface):
     """
-    Core methods for the u1db local storage.
+    I implement core methods for the u1db local storage.
     """
+    local_db_path = Attribute(
+        "The path for the local database replica")
     local_db_file_name = Attribute(
         "The name of the local SQLCipher U1DB database file")
-    secrets_file_name = Attribute(
-        "The name of the file where the storage secrets will be stored")
+    uuid = Attribute("The user uuid")
     default_prefix = Attribute(
         "Prefix for default values for path")
 
@@ -278,3 +279,81 @@ class ILocalStorage(Interface):
         :type conflicted_doc_revs: list
         """
 
+
+class ISyncableStorage(Interface):
+    """
+    I implement methods to synchronize with a remote replica.
+    """
+    server_url = Attribute("The URL of the Soledad server.")
+    syncing = Attribute(
+        "Property, True if the syncer is syncing.")
+    token = Attribute("The authentication Token.")
+
+    # XXX this needs to be public?
+    syncer = Attribute("Accessor to the syncer")
+
+    def sync(self, defer_decryption=True):
+        """
+        Synchronize the local encrypted replica with a remote replica.
+
+        This method blocks until a syncing lock is acquired, so there are no
+        attempts of concurrent syncs from the same client replica.
+
+        :param url: the url of the target replica to sync with
+        :type url: str
+
+        :param defer_decryption:
+            Whether to defer the decryption process using the intermediate
+            database. If False, decryption will be done inline.
+        :type defer_decryption: bool
+
+        :return:
+            A deferred that will fire with the local generation before the
+            synchronisation was performed.
+        :rtype: str
+        """
+
+    def stop_sync(self):
+        """
+        Stop the current syncing process.
+        """
+
+    # XXX is this used somewhere, or just something nice to have?
+    def need_sync(self, url):
+        """
+        Return if local db replica differs from remote url's replica.
+
+        :param url: The remote replica to compare with local replica.
+        :type url: str
+
+        :return: Whether remote replica and local replica differ.
+        :rtype: bool
+        """
+
+
+class ISharedSecretsStorage(Interface):
+    """
+    I implement methods needed for the Shared Recovery Database.
+    """
+    secrets_path = Attribute(
+        "Path for storing encrypted key used for symmetric encryption.")
+    secrets_file_name = Attribute(
+        "The name of the file where the storage secrets will be stored")
+
+    # XXX All these below ----- need to be public? Used from where?
+    secret_id = Attribute("The id of the storage secret to be used")
+
+    storage_secret = Attribute("")
+    remote_storage_secret = Attribute("")
+    secrets = Attribute("")
+    passphrase = Attribute("")
+
+    def change_passphrase(self, new_passphrase):
+        """
+        Change the passphrase that encrypts the storage secret.
+
+        :param new_passphrase: The new passphrase.
+        :type new_passphrase: unicode
+
+        :raise NoStorageSecret: Raised if there's no storage secret available.
+        """

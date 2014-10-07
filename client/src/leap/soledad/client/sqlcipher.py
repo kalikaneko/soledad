@@ -534,6 +534,7 @@ class SQLCipherU1DBSync(object):
         # format is the following::
         #
         #  self._syncers = {'<url>': ('<auth_hash>', syncer), ...}
+
         self._syncers = {}
         self._sync_db_write_lock = threading.Lock()
         self.sync_queue = multiprocessing.Queue()
@@ -636,13 +637,19 @@ class SQLCipherU1DBSync(object):
         Because of that, this method blocks until the syncing lock can be
         acquired.
         """
-        with self.syncing_lock[self._get_replica_uid()]:
+        # XXX careful! ----------------------------------
+        # _replica_uid IS a u1db db query that must be handled
+        # with a cb. Or maybe setup during initialization?
+        with self.syncing_lock[self._replica_uid]:
             syncer = self._get_syncer(url, creds=creds)
             yield syncer
 
     @property
     def syncing(self):
-        lock = self.syncing_lock[self._get_replica_uid()]
+        # XXX careful! ----------------------------------
+        # _replica_uid IS a u1db db query that must be handled
+        # with a cb. Or maybe setup during initialization?
+        lock = self.syncing_lock[self._replica_uid]
         acquired_lock = lock.acquire(False)
         if acquired_lock is False:
             return True
@@ -715,7 +722,12 @@ class SQLCipherU1DBSync(object):
 
     @property
     def replica_uid(self):
+        # XXX this SHOULD BE a callback
         return self._get_replica_uid()
+
+    def get_generation(self):
+        # XXX this SHOULD BE a callback
+        return self._get_generation()
 
     def close(self):
         """
