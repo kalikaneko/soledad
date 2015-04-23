@@ -683,6 +683,9 @@ class Soledad(object):
         """
         return self._dbsyncer.syncing
 
+    def get_generation(self):
+        return self._dbsyncer.get_generation()
+
     def _set_token(self, token):
         """
         Set the authentication token for remote database access.
