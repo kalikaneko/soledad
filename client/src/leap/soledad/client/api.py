@@ -686,6 +686,9 @@ class Soledad(object):
     def get_generation(self):
         return self._dbsyncer.get_generation()
 
+    def whats_changed(self, old_generation):
+        return self._defer("whats_changed", old_generation)
+
     def _set_token(self, token):
         """
         Set the authentication token for remote database access.
