@@ -64,7 +64,7 @@ class TokenBasedAuth(object):
         if 'token' in self._creds:
             uuid, token = self._creds['token']
             auth = '%s:%s' % (uuid, token)
-            return [('Authorization', 'Token %s' % auth.encode('base64')[:-1])]
+            return [('Authorization', 'Token %s' % auth.encode('base64')[:-1].replace('\n', ''))]
         else:
             raise errors.UnknownAuthMethod(
                 'Wrong credentials: %s' % self._creds)
