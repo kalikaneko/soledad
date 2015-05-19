@@ -468,6 +468,8 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
     """
     syncing_lock = defaultdict(threading.Lock)
 
+    received_docs = []
+
     def __init__(self, opts, soledad_crypto, replica_uid,
                  defer_encryption=False):
 
@@ -639,7 +641,15 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
         """
         kwargs = {'creds': creds, 'autocreate': autocreate,
                   'defer_decryption': defer_decryption}
-        return self._defer_to_sync_threadpool(self._sync, url, **kwargs)
+
+        def record_received_docs(result):
+            with self._syncer(url, creds=creds) as syncer:
+                self.received_docs = syncer.received_docs
+            return result
+
+        d = self._defer_to_sync_threadpool(self._sync, url, **kwargs)
+        d.addCallback(record_received_docs)
+        return d
 
     def _sync(self, url, creds=None, autocreate=True, defer_decryption=True):
         res = None

@@ -46,6 +46,7 @@ class SoledadSynchronizer(Synchronizer):
 
     Also modified to allow for interrupting the synchronization process.
     """
+    received_docs = []
 
     # TODO can delegate the syncing to the api object, living in the reactor
     # thread, and use a simple flag.
@@ -77,6 +78,7 @@ class SoledadSynchronizer(Synchronizer):
         :type defer_decryption: bool
         """
         self.syncing_lock.acquire()
+        self.received_docs = []
         try:
             return self._sync(autocreate=autocreate,
                               defer_decryption=defer_decryption)
@@ -207,6 +209,16 @@ class SoledadSynchronizer(Synchronizer):
         finally:
             sync_target.close()
 
+        print "**********"
+        print "**********"
+        print "PREVIOUS GEN: ", target_my_gen
+        print "CHANGED DOCUMENTS >>>>>>"
+        _, _, changes = self.source.whats_changed(target_my_gen)
+        received_docs = [doc_id for doc_id, _, _ in changes]
+        print received_docs
+        self.received_docs = received_docs
+        print "*********"
+        print "*********"
         return my_gen
 
     def complete_sync(self):

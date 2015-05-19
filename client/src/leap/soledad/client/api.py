@@ -654,6 +654,10 @@ class Soledad(object):
             defer_decryption=defer_decryption)
 
         def _sync_callback(local_gen):
+            self._last_received_docs = self._dbsyncer.received_docs
+            print "***"
+            print "LAST RECEIVED (API)", self._last_received_docs
+            print "***"
             soledad_events.signal(
                 soledad_events.SOLEDAD_DONE_DATA_SYNC, self.uuid)
             return local_gen
@@ -688,6 +692,9 @@ class Soledad(object):
 
     def whats_changed(self, old_generation):
         return self._defer("whats_changed", old_generation)
+
+    def get_last_received_docs(self):
+        return self._last_received_docs
 
     def _set_token(self, token):
         """
