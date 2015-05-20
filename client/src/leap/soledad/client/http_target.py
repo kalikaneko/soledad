@@ -124,7 +124,7 @@ class SoledadHTTPSyncTarget(SyncTarget):
 
     #
     # SyncTarget API
-    # 
+    #
 
     @defer.inlineCallbacks
     def get_sync_info(self, source_replica_uid):
@@ -354,7 +354,7 @@ class SoledadHTTPSyncTarget(SyncTarget):
             d = self._sync_enc_pool.get_encrypted_doc(doc.doc_id, doc.rev)
             d.addCallback(_maybe_encrypt_doc_inline)
         return d
-    
+
     #
     # methods to receive doc
     #
@@ -408,7 +408,7 @@ class SoledadHTTPSyncTarget(SyncTarget):
             idx += 1
         results = yield defer.gatherResults(deferreds)
 
-        # get genration and transaction id of target after insertions
+        # get generation and transaction id of target after insertions
         if deferreds:
             _, new_generation, new_transaction_id = results.pop()
 
@@ -422,6 +422,7 @@ class SoledadHTTPSyncTarget(SyncTarget):
 
         def _wait_or_finish():
             if not self._sync_decr_pool.has_finished():
+                print "decr pool has not finished yet..."
                 reactor.callLater(
                     SyncDecrypterPool.DECRYPT_LOOP_PERIOD,
                     _wait_or_finish)
@@ -438,7 +439,7 @@ class SoledadHTTPSyncTarget(SyncTarget):
         defer.returnValue([new_generation, new_transaction_id])
 
     def _receive_one_doc(self, headers, last_known_generation,
-            last_known_trans_id, sync_id, received):
+                         last_known_trans_id, sync_id, received):
         entries = ['[']
         # add remote replica metadata to the request
         self._prepare(

@@ -14,14 +14,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-
-
 """
 A pool of encryption/decryption concurrent and parallel workers for using
 during synchronization.
 """
-
-
 import multiprocessing
 import threading
 import time
@@ -31,6 +27,7 @@ import logging
 from zope.proxy import sameProxiedObjects
 
 from twisted.internet import defer
+from twisted.internet import reactor
 from twisted.internet.threads import deferToThread
 
 from leap.soledad.common.document import SoledadDocument
@@ -391,12 +388,14 @@ class SyncDecrypterPool(SyncEncryptDecryptPool):
 
         self._async_results = []
         self._exception = None
-        self._finished = threading.Event()
 
         # clear the database before starting the sync
         self._empty_db = threading.Event()
         d = self._empty()
         d.addCallback(lambda _: self._empty_db.set())
+
+        self.processing = False
+        self.done_processing = False
 
         # start the decryption loop
         self._deferred_loop = deferToThread(
@@ -760,34 +759,52 @@ class SyncDecrypterPool(SyncEncryptDecryptPool):
         This method runs in its own thread, so sleeping will not interfere
         with the main thread.
         """
+
+        def mark_as_done_processing():
+            self.processing = False
+
+        def mark_as_finished():
+            self.done_processing = True
+
         try:
             # wait for database to be emptied
             self._empty_db.wait()
             # wait until we know how many documents we need to process
             while self._docs_to_process is None:
+                print "no docs to process!"
                 time.sleep(self.DECRYPT_LOOP_PERIOD)
-            # because all database operations are asynchronous, we use an event to
-            # make sure we don't start the next loop before the current one has
-            # finished.
-            event = threading.Event()
-            # loop until we have processes as many docs as the number of changes
+
+            # loop until we have processes as many docs as the number of
+            # changes
             while self._processed_docs < self._docs_to_process:
                 if sameProxiedObjects(
                         self._insert_doc_cb.get(self.source_replica_uid),
                         None):
                     continue
-                event.clear()
+
+                if self.processing:
+                    return
+                self.processing = True
+
                 d = self._decrypt_received_docs()
                 d.addCallback(lambda _: self._raise_if_async_fails())
                 d.addCallback(lambda _: self._process_decrypted())
                 d.addCallback(self._delete_processed_docs)
-                d.addCallback(lambda _: event.set())
-                event.wait()
-                # sleep a bit to give time for some decryption work
+
+                # XXX addBoth instead??
+                d.addCallback(lambda _: reactor.callFromThread(
+                    mark_as_done_processing))
+
                 time.sleep(self.DECRYPT_LOOP_PERIOD)
+
         except Exception as e:
+            logger.exception(e)
+            # XXX should probably signal some kind of error decrypting.
+            # Other parts like keymanager probably want to know.
             self._exception = e
-        self._finished.set()
+
+        finally:
+            reactor.callFromThread(mark_as_finished)
 
     def has_finished(self):
-        return self._finished.is_set()
+        return not self.processing and self.done_processing
