@@ -20,6 +20,18 @@ Interfaces used by the Soledad Client.
 from zope.interface import Interface, Attribute
 
 
+class ISoledadSyncedPlugin(Interface):
+
+    def process_received_docs(self, doc_id_list):
+        """
+        Do something with the passed list of doc_ids received after the last
+        sync.
+        """
+
+    watched_doc_types = Attribute("""
+        a tuple of the watched doc types for this plugin""")
+
+
 class ILocalStorage(Interface):
     """
     I implement core methods for the u1db local storage of documents and

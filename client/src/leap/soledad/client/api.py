@@ -42,6 +42,7 @@ except ImportError:
 from StringIO import StringIO
 from u1db.remote import http_client
 from u1db.remote.ssl_match_hostname import match_hostname
+from twisted.plugin import getPlugins
 from zope.interface import implements
 
 from leap.common.config import get_path_prefix
@@ -69,6 +70,26 @@ Path to the certificate file used to certify the SSL connection between
 Soledad client and server.
 """
 SOLEDAD_CERT = None
+
+# A whitelist of modules from where to collect plugins dynamically.
+# For the moment restricted to leap namespace, but the idea is that we can pass
+# other "trusted" modules as options to the initialization of soledad.
+PLUGGABLE_LEAP_MODULES = ('mail', 'keymanager')
+
+
+def collect_plugins(interface):
+    """
+    Traverse a whitelist of modules and collect all the plugins that implement
+    the passed interface.
+    """
+    plugins = []
+    for namespace in PLUGGABLE_LEAP_MODULES:
+        try:
+            module = __import__('leap.%s.plugins' % namespace, fromlist='.')
+            plugins = plugins + list(getPlugins(interface, module))
+        except ImportError:
+            pass
+    return plugins
 
 
 class Soledad(object):
@@ -654,10 +675,21 @@ class Soledad(object):
             defer_decryption=defer_decryption)
 
         def _sync_callback(local_gen):
-            self._last_received_docs = self._dbsyncer.received_docs
+            received = self._dbsyncer.received_docs
+            self._last_received_docs = received
             print "***"
-            print "LAST RECEIVED (API)", self._last_received_docs
+            print "LAST RECEIVED (API)", received
             print "***"
+
+            # Post-Sync Hooks
+            synced_plugin = soledad_interfaces.ISoledadSyncedPlugin
+            if received:
+                suitable_plugins = collect_plugins(synced_plugin)
+                print "SYNC PLUGINS:", suitable_plugins
+                for plugin in suitable_plugins:
+                    print "PROCESSING POST-SYNC HOOK with PLUGIN", plugin
+                    _process_received_docs(plugin, self._last_received_docs)
+
             soledad_events.signal(
                 soledad_events.SOLEDAD_DONE_DATA_SYNC, self.uuid)
             return local_gen
@@ -807,6 +839,10 @@ class Soledad(object):
         Run a raw sqlcipher query in the local database.
         """
         return self._dbpool.runQuery(*args, **kw)
+
+
+def _process_received_docs(sync_hook_plugin, doc_id_list):
+    sync_hook_plugin.process_received_docs(doc_id_list)
 
 
 def _convert_to_unicode(content):
