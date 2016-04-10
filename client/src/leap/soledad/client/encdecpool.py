@@ -160,8 +160,10 @@ def encrypt_doc_task(doc_id, doc_rev, content, key, secret):
     :return: A tuple containing the doc id, revision and encrypted content.
     :rtype: tuple(str, str, str)
     """
-    encrypted_content = encrypt_docstr(
-        content, doc_id, doc_rev, key, secret)
+    # TODO --- for debugging
+    #encrypted_content = encrypt_docstr(
+        #content, doc_id, doc_rev, key, secret)
+    encrypted_content = content
     return doc_id, doc_rev, encrypted_content
 
 
@@ -247,6 +249,7 @@ class SyncEncrypterPool(SyncEncryptDecryptPool):
                         pool of workers. Useful for debugging purposes.
         :type workers: bool
         """
+        print "SEND DOC TO ENCRYPT (FAKE)..."
         soledad_assert(self._crypto is not None, "need a crypto object")
         docstr = doc.get_json()
         key = self._crypto.doc_passphrase(doc.doc_id)
@@ -265,6 +268,7 @@ class SyncEncrypterPool(SyncEncryptDecryptPool):
                        content.
         :type result: tuple(str, str, str)
         """
+        print "INSERTING DECRYPTED DOC....."
         doc_id, doc_rev, content = result
         return self._insert_encrypted_local_doc(doc_id, doc_rev, content)
 

@@ -57,7 +57,8 @@ How many times a SQLCipher query should be retried in case of timeout.
 SQLCIPHER_MAX_RETRIES = 10
 
 
-def getConnectionPool(opts, openfun=None, driver="pysqlcipher",
+#def getConnectionPool(opts, openfun=None, driver="pysqlcipher",
+def getConnectionPool(opts, openfun=None, driver="sqlite3",
                       sync_enc_pool=None):
     """
     Return a connection pool.

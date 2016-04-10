@@ -52,7 +52,8 @@ from u1db.backends import sqlite_backend
 from hashlib import sha256
 from functools import partial
 
-from pysqlcipher import dbapi2 as sqlcipher_dbapi2
+#from pysqlcipher import dbapi2 as sqlcipher_dbapi2
+from sqlite3 import dbapi2 as sqlcipher_dbapi2
 
 from twisted.internet import reactor
 from twisted.internet import defer
@@ -93,11 +94,12 @@ def initialize_sqlcipher_db(opts, on_init=None, check_same_thread=True):
 
     conn = sqlcipher_dbapi2.connect(
         opts.path, check_same_thread=check_same_thread)
-    pragmas.set_init_pragmas(conn, opts, extra_queries=on_init)
+    #pragmas.set_init_pragmas(conn, opts, extra_queries=on_init)
     return conn
 
 
 def initialize_sqlcipher_adbapi_db(opts, extra_queries=None):
+    # TODO --- this module doesn't exist.
     from leap.soledad.client import sqlcipher_adbapi
     return sqlcipher_adbapi.getConnectionPool(
         opts, extra_queries=extra_queries)
