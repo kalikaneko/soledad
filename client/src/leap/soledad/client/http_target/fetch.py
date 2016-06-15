@@ -164,21 +164,29 @@ class HTTPDocFetcher(object):
             doc = SoledadDocument(doc_id, rev, content)
             if is_symmetrically_encrypted(doc):
                 if self._queue_for_decrypt:
+                    print "[FETCH] insert for decryption...", doc_id, gen
                     self._sync_decr_pool.insert_encrypted_received_doc(
                         doc.doc_id, doc.rev, doc.content, gen, trans_id,
                         idx)
                 else:
                     # defer_decryption is False or no-sync-db fallback
                     doc.set_json(self._crypto.decrypt_doc(doc))
+                    # FIXME -- FPE
+                    print "Should insert (no defer)"
                     self._insert_doc_cb(doc, gen, trans_id)
             else:
                 # not symmetrically encrypted doc, insert it directly
                 # or save it in the decrypted stage.
                 if self._queue_for_decrypt:
+                    # FIXME -- FPE ------------------------------------
+                    print "not sym-encr, inserting received doc for later"
                     self._sync_decr_pool.insert_received_doc(
                         doc.doc_id, doc.rev, doc.content, gen, trans_id,
                         idx)
+                    # -------------------------------------------------
                 else:
+                    # FIXME -- FPE
+                    print "not sym, inserting directly..."
                     self._insert_doc_cb(doc, gen, trans_id)
             # -------------------------------------------------------------
             # end of symmetric decryption

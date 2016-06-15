@@ -207,7 +207,16 @@ class SyncTargetAPI(SyncTarget):
         self.source_replica_uid = source_replica_uid
 
         # save a reference to the callback so we can use it after decrypting
+
+        # FIXME ------ this should use adbapi ------------------------------
+        # BUT there's some logic in insert_doc_from_target that needs to be
+        # copied over.
+        # FIXME this _insert_doc_cb is used in other mixin classes that compose
+        # Soledad HTTPSyncTargetAPI, but this is a *very* bad place to assign
+        # it.
+
         self._insert_doc_cb = insert_doc_cb
+        # ------------------------------------------------------------------
 
         gen_after_send, trans_id_after_send = yield self._send_docs(
             docs_by_generation,

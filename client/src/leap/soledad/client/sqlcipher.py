@@ -426,7 +426,8 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
     ENCRYPT_LOOP_PERIOD = 1
 
     def __init__(self, opts, soledad_crypto, replica_uid, cert_file,
-                 defer_encryption=False, sync_db=None, sync_enc_pool=None):
+                 defer_encryption=False, sync_db=None, sync_enc_pool=None,
+                 dbpool=None):
 
         self._opts = opts
         self._path = opts.path
@@ -454,6 +455,9 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
         self._reactor = reactor
         self._reactor.callWhenRunning(self._start)
 
+        self._dbpool = dbpool
+
+        # FIXME -- whats_changed uses this db_handle
         self._db_handle = None
         self._initialize_main_db()
 
@@ -544,7 +548,8 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
                     crypto=self._crypto,
                     cert_file=self._cert_file,
                     sync_db=self._sync_db,
-                    sync_enc_pool=self._sync_enc_pool))
+                    sync_enc_pool=self._sync_enc_pool,
+                    dbpool=self._dbpool))
             self._syncers[url] = (h, syncer)
         # in order to reuse the same synchronizer multiple times we have to
         # reset its state (i.e. the number of documents received from target

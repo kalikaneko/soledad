@@ -52,7 +52,7 @@ class SoledadHTTPSyncTarget(SyncTargetAPI, HTTPDocSender, HTTPDocFetcher):
     written to the main database.
     """
     def __init__(self, url, source_replica_uid, creds, crypto, cert_file,
-                 sync_db=None, sync_enc_pool=None):
+                 sync_db=None, sync_enc_pool=None, dbpool=None):
         """
         Initialize the sync target.
 
@@ -95,6 +95,7 @@ class SoledadHTTPSyncTarget(SyncTargetAPI, HTTPDocSender, HTTPDocFetcher):
         # asynchronous encryption/decryption attributes
         self._decryption_callback = None
         self._sync_decr_pool = None
+        self._dbpool = None
 
         # XXX Increasing timeout of simple requests to avoid chances of hitting
         # the duplicated syncing bug. This could be reduced to the 30s default

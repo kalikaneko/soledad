@@ -302,7 +302,8 @@ class Soledad(object):
             SOLEDAD_CERT,
             defer_encryption=self._defer_encryption,
             sync_db=self._sync_db,
-            sync_enc_pool=self._sync_enc_pool)
+            sync_enc_pool=self._sync_enc_pool,
+            dbpool=self._dbpool)
 
     def sync_stats(self):
         sync_phase = 0

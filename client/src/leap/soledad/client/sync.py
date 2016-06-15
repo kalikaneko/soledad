@@ -51,6 +51,7 @@ class SoledadSynchronizer(Synchronizer):
     received_docs = []
 
     def __init__(self, *args, **kwargs):
+        # FIXME --------- pass the dbpool in here?
         Synchronizer.__init__(self, *args, **kwargs)
         if DO_STATS:
             self.sync_phase = [0]
@@ -176,6 +177,10 @@ class SoledadSynchronizer(Synchronizer):
 
         # exchange documents and try to insert the returned ones with
         # the target, return target synced-up-to gen.
+
+        # FIXME ---- pass a deferred-aware _insert_doc_from_target ???
+
+
         new_gen, new_trans_id = yield sync_target.sync_exchange(
             docs_by_generation, self.source._replica_uid,
             target_last_known_gen, target_last_known_trans_id,
